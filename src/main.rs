@@ -737,11 +737,11 @@ impl Match {
         if self.disconnected.is_some() {
             return;
         }
-        if let Some((at, effect)) = self.pending_sound {
-            if now >= at {
-                audio.play(effect);
-                self.pending_sound = None;
-            }
+        if let Some((at, effect)) = self.pending_sound
+            && now >= at
+        {
+            audio.play(effect);
+            self.pending_sound = None;
         }
         if self
             .missile
@@ -751,10 +751,11 @@ impl Match {
             let missile = self.missile.take().expect("checked above");
             self.land(missile.shot, now, audio);
         }
-        if self.missile.is_none() && now >= self.hold_until {
-            if let Some(message) = self.inbox.pop_front() {
-                self.handle(message, now, audio);
-            }
+        if self.missile.is_none()
+            && now >= self.hold_until
+            && let Some(message) = self.inbox.pop_front()
+        {
+            self.handle(message, now, audio);
         }
     }
 
@@ -1125,19 +1126,19 @@ impl Match {
                 3.0,
                 Color::new(ACCENT.r, ACCENT.g, ACCENT.b, 0.4 + 0.5 * pulse),
             );
-            if let Some(target) = board_cell_at(RIGHT_BOARD, ui.mouse) {
-                if self.session.enemy_grid().can_target(target) {
-                    draw_crosshair(cell_center(RIGHT_BOARD, target), now);
-                    if ui.clicked {
-                        self.fire(target, now, audio);
-                    }
+            if let Some(target) = board_cell_at(RIGHT_BOARD, ui.mouse)
+                && self.session.enemy_grid().can_target(target)
+            {
+                draw_crosshair(cell_center(RIGHT_BOARD, target), now);
+                if ui.clicked {
+                    self.fire(target, now, audio);
                 }
             }
         }
-        if let Phase::AwaitingResult(target) = phase {
-            if self.missile.is_none() {
-                draw_crosshair(cell_center(RIGHT_BOARD, target), now);
-            }
+        if let Phase::AwaitingResult(target) = phase
+            && self.missile.is_none()
+        {
+            draw_crosshair(cell_center(RIGHT_BOARD, target), now);
         }
 
         let status = match phase {
@@ -1262,11 +1263,7 @@ impl Match {
             ("DEFEAT", DANGER)
         };
         draw_text_centered(title, VW / 2.0, 330.0, 100.0 * pulse, color);
-        let accuracy = if self.shots > 0 {
-            100 * self.hits / self.shots
-        } else {
-            0
-        };
+        let accuracy = (100 * self.hits).checked_div(self.shots).unwrap_or(0);
         draw_text_centered(
             &format!(
                 "{} shots fired, {}% hit rate   ·   Score: You {} - {} {}",

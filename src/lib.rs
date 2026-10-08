@@ -2,4 +2,5 @@
 //! `main.rs` is a thin graphical shell around it.
 
 pub mod domain;
+pub mod grid;
 pub mod rng;

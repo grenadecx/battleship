@@ -9,3 +9,4 @@ pub mod opponent;
 pub mod protocol;
 pub mod rng;
 pub mod session;
+pub mod sound;

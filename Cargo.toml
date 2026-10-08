@@ -1,0 +1,21 @@
+[package]
+name = "battleship"
+version = "0.1.0"
+edition = "2024"
+description = "Battleship with a computer opponent and P2P TCP multiplayer"
+build = "build.rs"
+
+[dependencies]
+macroquad = { version = "0.4", features = ["audio"] }
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+[dev-dependencies]
+# The decoder macroquad's audio backend uses; lets tests prove our WAVs load.
+audrey = { version = "0.3", default-features = false, features = ["wav"] }

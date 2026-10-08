@@ -228,10 +228,10 @@ impl Host {
                     Ok((stream, _)) => {
                         let connections = connections.clone();
                         thread::spawn(move || {
-                            if stream.set_nonblocking(false).is_ok() {
-                                if let Ok(link) = handshake(stream) {
-                                    let _ = connections.send(link);
-                                }
+                            if stream.set_nonblocking(false).is_ok()
+                                && let Ok(link) = handshake(stream)
+                            {
+                                let _ = connections.send(link);
                             }
                         });
                     }

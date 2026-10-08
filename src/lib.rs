@@ -6,3 +6,4 @@ pub mod domain;
 pub mod grid;
 pub mod protocol;
 pub mod rng;
+pub mod session;

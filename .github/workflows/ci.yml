@@ -9,7 +9,7 @@ jobs:
   test:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Pinned so new clippy lints don't break CI unannounced; bump deliberately.
       - uses: dtolnay/rust-toolchain@1.99
         with:

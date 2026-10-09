@@ -4,6 +4,51 @@ The *Tab 6 - Immersion* lab, built in Rust with test-driven development. It ship
 single executable with a graphical interface, animations and sound. You can play
 against the computer or against a friend over the internet (peer to peer TCP).
 
+## Download
+
+Ready-made builds for Linux x86_64, Windows x86_64 and macOS on Apple silicon are on
+the [releases page](https://github.com/grenadecx/battleship/releases/latest). Unpack the
+archive and run `battleship` from the unpacked folder.
+
+### macOS: "Apple could not verify 'battleship'"
+
+The macOS build is not signed or notarized by Apple, so Gatekeeper blocks it when it was
+downloaded with a browser. Use one of these:
+
+* **Terminal**: in the unpacked folder, clear the quarantine flag and start the game:
+
+  ```sh
+  xattr -d com.apple.quarantine battleship
+  ./battleship
+  ```
+
+* **Finder**: open `battleship` once and dismiss the warning, then go to
+  **System Settings → Privacy & Security** and click **Open Anyway**. On macOS 15
+  (Sequoia) and later, right-click → Open no longer skips the warning.
+
+* **Download with `curl`**: files downloaded on the command line never get the
+  quarantine flag. Set `v` to the version you want:
+
+  ```sh
+  v=0.2.0
+  curl -LO https://github.com/grenadecx/battleship/releases/download/v$v/battleship-v$v-macos-arm64.tar.gz
+  tar xzf battleship-v$v-macos-arm64.tar.gz
+  ./battleship-v$v-macos-arm64/battleship
+  ```
+
+### Build it yourself
+
+Anything you compile yourself runs without Gatekeeper warnings, on every platform. With
+[Rust](https://rustup.rs) installed:
+
+```sh
+cargo install --git https://github.com/grenadecx/battleship --tag v0.2.0
+battleship
+```
+
+This puts `battleship` in `~/.cargo/bin`. Leave out `--tag` to build the latest code on
+`main` instead of a release.
+
 ## Build and run
 
 ```sh

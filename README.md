@@ -141,6 +141,29 @@ into the next, which the rematch tests exposed. The suite covers:
   mismatch, strangers on the port, and freeing the port,
 * WAV encoding, checked with the same decoder the audio backend uses.
 
+### Mutation testing
+
+[cargo-mutants](https://mutants.rs/) checks that the tests actually catch bugs. It
+makes small changes to the library, such as turning `<` into `<=` or `+` into `-`,
+and runs the tests against each one. A mutant the tests still pass on points to
+behaviour nothing checks.
+
+```sh
+cargo install --locked cargo-mutants
+cargo mutants                              # every mutant (several minutes)
+cargo mutants -f src/ai.rs                 # one file
+git diff origin/main... > pr.diff && cargo mutants --in-diff pr.diff   # only your changes
+```
+
+The results land in `mutants.out/`: `missed.txt` lists the mutants no test caught.
+Every mutant that compiles should be caught, or make the tests hang until the timeout,
+which also counts as caught.
+
+`.cargo/mutants.toml` skips `src/main.rs` and lists the few mutants no test can catch,
+each with its reason. Some are equivalent (they behave exactly like the original),
+some depend on the machine (network routes, the clock), and some only change how a
+sound effect sounds.
+
 ## Credits
 
 The font is DejaVu Sans Bold (see `assets/DejaVu-LICENSE.txt`). The lab is from
@@ -149,7 +172,9 @@ The font is DejaVu Sans Bold (see `assets/DejaVu-LICENSE.txt`). The lab is from
 ## Releases
 
 CI (`.github/workflows/ci.yml`) checks formatting, runs clippy and runs the tests on
-every push and pull request.
+every push and pull request. `.github/workflows/mutants.yml` runs mutation testing on
+the lines each pull request changes and fails if a mutant survives. It also runs
+against the whole library every Monday and on demand.
 
 Releases follow [semantic versioning](https://semver.org). To publish one, run the
 release script from an up-to-date `main`:

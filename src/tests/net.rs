@@ -31,6 +31,40 @@ fn greet_host(host: &Host, greeting: &[u8]) {
     stranger.read_to_end(&mut Vec::new()).unwrap();
 }
 
+/// A link hosted by us, with the raw socket of the peer on the other end.
+/// The peer has already read our HELLO.
+fn link_with_raw_peer() -> (NetLink, BufReader<TcpStream>) {
+    let mut host = Host::start(0).unwrap();
+    let mut peer = TcpStream::connect(("127.0.0.1", host.port())).unwrap();
+    peer.set_read_timeout(Some(TIMEOUT)).unwrap();
+    let hello = Message::Hello {
+        version: PROTOCOL_VERSION,
+    };
+    writeln!(peer, "{}", hello.encode()).unwrap();
+    let link = wait_for(|| host.poll());
+    let mut peer = BufReader::new(peer);
+    peer.read_line(&mut String::new()).unwrap();
+    (link, peer)
+}
+
+/// Lines the peer receives up to and including `last`.
+fn lines_until(peer: &mut BufReader<TcpStream>, last: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    loop {
+        let mut line = String::new();
+        assert_ne!(
+            peer.read_line(&mut line).unwrap(),
+            0,
+            "closed before {last}"
+        );
+        let line = line.trim().to_string();
+        lines.push(line.clone());
+        if line == last {
+            return lines;
+        }
+    }
+}
+
 #[test]
 fn parses_valid_addresses() {
     for (input, expected) in [
@@ -307,4 +341,42 @@ fn a_garbled_message_ends_the_game_with_a_protocol_error() {
         panic!("expected a disconnect");
     };
     assert!(why.starts_with("protocol error"), "{why}");
+}
+
+#[test]
+fn blank_lines_from_the_peer_are_ignored() {
+    let (mut link, mut peer) = link_with_raw_peer();
+    peer.get_mut().write_all(b"\nREADY\n").unwrap();
+    assert_eq!(
+        wait_for(|| link.poll()),
+        OpponentEvent::Message(Message::Ready)
+    );
+}
+
+#[test]
+fn pings_at_most_once_per_interval() {
+    let (mut link, mut peer) = link_with_raw_peer();
+    link.poll();
+    link.poll();
+    link.send(Message::Ready);
+    let pings = lines_until(&mut peer, "READY")
+        .iter()
+        .filter(|line| line.starts_with("PING"))
+        .count();
+    assert_eq!(pings, 1);
+}
+
+#[test]
+fn leaving_says_goodbye() {
+    let (link, mut peer) = link_with_raw_peer();
+    drop(link);
+    lines_until(&mut peer, "BYE");
+}
+
+#[test]
+fn leaving_closes_the_connection() {
+    let (link, mut peer) = link_with_raw_peer();
+    drop(link);
+    peer.read_to_end(&mut Vec::new())
+        .expect("connection should close");
 }

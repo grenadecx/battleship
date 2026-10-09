@@ -8,7 +8,8 @@ on:
 
 jobs:
   mutants:
-    runs-on: ubuntu-22.04
+    # The prebuilt cargo-mutants needs glibc 2.39, which 22.04 does not have.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:

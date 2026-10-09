@@ -12,44 +12,43 @@ use battleship::setup::FleetEditor;
 use battleship::sound::{self, Effect};
 use macroquad::audio::{PlaySoundParams, Sound, load_sound_from_bytes, play_sound};
 use macroquad::prelude::*;
-use std::cell::RefCell;
+use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
 
 static FONT_BYTES: &[u8] = include_bytes!("../assets/DejaVuSans-Bold.ttf");
 
 thread_local! {
-    static FONT: RefCell<Option<Font>> = const { RefCell::new(None) };
+    /// Leaked on purpose: dropping the font's texture during thread-local teardown,
+    /// after macroquad has destroyed the GL context, segfaults on exit.
+    static FONT: Cell<Option<&'static Font>> = const { Cell::new(None) };
 }
 
 fn load_font() {
     if let Ok(mut font) = load_ttf_font_from_bytes(FONT_BYTES) {
         font.set_filter(FilterMode::Linear);
-        FONT.with(|f| *f.borrow_mut() = Some(font));
+        FONT.set(Some(Box::leak(Box::new(font))));
     }
 }
 
 /// Draws text with the embedded font; `y` is the baseline.
 fn text(s: &str, x: f32, y: f32, size: f32, color: Color) -> TextDimensions {
     let font_size = (size * 0.8).round().max(1.0) as u16;
-    FONT.with(|f| {
-        let font = f.borrow();
-        draw_text_ex(
-            s,
-            x,
-            y,
-            TextParams {
-                font: font.as_ref(),
-                font_size,
-                color,
-                ..Default::default()
-            },
-        )
-    })
+    draw_text_ex(
+        s,
+        x,
+        y,
+        TextParams {
+            font: FONT.get(),
+            font_size,
+            color,
+            ..Default::default()
+        },
+    )
 }
 
 fn measure(s: &str, size: f32) -> TextDimensions {
     let font_size = (size * 0.8).round().max(1.0) as u16;
-    FONT.with(|f| measure_text(s, f.borrow().as_ref(), font_size, 1.0))
+    measure_text(s, FONT.get(), font_size, 1.0)
 }
 
 // ---------------------------------------------------------------------------

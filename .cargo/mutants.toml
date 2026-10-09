@@ -2,8 +2,16 @@
 # Every mutant that compiles should be caught by a test. The exclusions below
 # are the ones no test can catch; each says why.
 
-# main.rs is the rendering shell and has no tests; the library holds the logic.
-exclude_globs = ["src/main.rs", "build.rs"]
+# The rendering shell (main.rs and the online screens) has no tests; the
+# libraries hold the logic. web_socket.rs only compiles for the browser, so
+# native test runs cannot see mutants in it.
+exclude_globs = [
+    "crates/game/src/main.rs",
+    "crates/game/src/online_*.rs",
+    "crates/game/src/web_socket.rs",
+    "crates/game/build.rs",
+    "crates/server/src/main.rs",
+]
 
 exclude_re = [
     # Equivalent: both directions along a line are searched, so walking each

@@ -1,8 +1,12 @@
 # Battleship
 
-The *Tab 6 - Immersion* lab, built in Rust with test-driven development. It ships as a
-single executable with a graphical interface, animations and sound. You can play
-against the computer or against a friend over the internet (peer to peer TCP).
+The *Tab 6 - Immersion* lab, built in Rust with test-driven development. It has a
+graphical interface, animations and sound, and you can play against the computer or
+against a friend. It comes in two forms, built from the same source:
+
+* **Desktop**: a single executable. Friends play each other directly over TCP.
+* **Browser**: the same game compiled to WebAssembly, served by a small web service in
+  a Docker container. Friends meet in a room on that service with a short code.
 
 ## Download
 
@@ -42,7 +46,7 @@ Anything you compile yourself runs without Gatekeeper warnings, on every platfor
 [Rust](https://rustup.rs) installed:
 
 ```sh
-cargo install --git https://github.com/grenadecx/battleship --tag v0.2.0
+cargo install --git https://github.com/grenadecx/battleship --tag v0.2.0 battleship
 battleship
 ```
 
@@ -52,8 +56,8 @@ This puts `battleship` in `~/.cargo/bin`. Leave out `--tag` to build the latest 
 ## Build and run
 
 ```sh
-cargo run --release          # play
-cargo test                   # run the test suite
+cargo run --release -p battleship    # play
+cargo test --workspace               # run the test suite
 ```
 
 You get one self-contained binary, `target/release/battleship`, with the font and
@@ -68,6 +72,43 @@ Platform notes:
 * **Windows / macOS**: `cargo build --release` works with no extra dependencies.
   Build on the target OS, or cross-compile (for example
   `rustup target add x86_64-pc-windows-gnu` plus the mingw-w64 toolchain).
+
+## Web version
+
+The browser version needs the web service, which serves the game and relays online
+games between browsers (they can't connect to each other directly). Run it with Docker:
+
+```sh
+docker build -t battleship .
+docker run --rm -p 8080:8080 battleship
+```
+
+Then open <http://localhost:8080>. Each release also publishes the image as
+`ghcr.io/grenadecx/battleship:<version>`.
+
+Without Docker, build the web files and start the service yourself:
+
+```sh
+rustup target add wasm32-unknown-unknown
+scripts/build-web.sh                  # writes target/web/
+cargo run --release -p battleship-server
+```
+
+The service listens on `PORT` (default 8080) and serves the files in
+`BATTLESHIP_WEB_DIR` (default `target/web`). `/healthz` answers `ok`, which the Docker
+image uses for its health check. Put it behind a reverse proxy with TLS when it faces
+the internet: pages served over HTTPS can only open secure WebSockets (`wss://`).
+`deploy/` has a ready setup for a server of its own: the published image behind
+[Caddy](https://caddyserver.com), which gets the certificate itself. Point a domain at
+the server, open ports 80 and 443, copy `deploy/` there, then:
+
+```sh
+echo BATTLESHIP_DOMAIN=battleship.example.com > .env
+docker compose up -d
+```
+
+`scripts/web-e2e.sh` plays the opening of an online game in two headless Chromes
+against a running service, as CI does against the Docker image.
 
 ## How to play
 
@@ -101,11 +142,23 @@ internet, the host must forward the TCP port (7777 by default) on their router t
 their computer and share their public IP. Allow the game through the firewall when
 the OS asks. The host fires first in round one.
 
+In the browser, *Host Online Game* opens a room on the web service and shows its
+four-character code. Your opponent opens the same page, chooses *Join Online Game* and
+enters the code. Desktop and browser players can't play each other.
+
 ## Design
 
-All rules live in the library crate (`src/lib.rs`). They don't depend on the UI and
-they are fully unit tested. `src/main.rs` is a thin macroquad shell that draws state
-and forwards clicks.
+The code is a Cargo workspace of three crates:
+
+| Crate                       | Contents |
+|-----------------------------|----------|
+| `crates/core` (`battleship-core`)     | All game rules and both wire protocols. No UI, no I/O and no platform code, so every other crate shares it. Fully unit tested. |
+| `crates/game` (`battleship`)          | The macroquad game, for the desktop and the browser. `main.rs` is a thin shell that draws state and forwards clicks. Online play is `online_lan.rs` (TCP) on the desktop and `online_web.rs` (relay rooms) in the browser, chosen at compile time. |
+| `crates/server` (`battleship-server`) | The web service: serves the browser build and relays games between browsers. |
+
+`web/` holds the page and the JavaScript side of the browser's WebSocket, and the
+`Dockerfile` builds the browser game and the service into one image, which `deploy/`
+runs behind Caddy for HTTPS.
 
 | Module        | Responsibility |
 |---------------|----------------|
@@ -114,8 +167,11 @@ and forwards clicks.
 | `ai`          | The computer's targeting. *Target mode* finishes a damaged ship along its line. *Hunt mode* fires where the most legal positions of the remaining ships overlap. It averages under 60 shots, versus about 95 for random fire. |
 | `session`     | One player's state machine: placement, waiting, my turn, awaiting result, their turn, won/lost. It also handles rematches and READY messages that arrive early. |
 | `protocol`    | The line-based wire format (`FIRE 3 7`, `RESULT SUNK Cruiser 3,7 4,7 5,7`, ...). |
-| `opponent`    | The `Opponent` trait. `ComputerOpponent` speaks the same protocol as a network peer, so the UI has one code path for both. |
-| `net`         | TCP host and join, with a version handshake (`HELLO BATTLESHIP 1`), background reader threads, disconnect detection and address parsing. |
+| `opponent`    | The `Opponent` trait. `ComputerOpponent` speaks the same protocol as a network peer, so the UI has one code path for every kind of opponent. |
+| `game`        | One match as the UI plays it: relays moves, paces shots for the animations and keeps score. |
+| `relay`       | The relay server's lobby protocol (`HOST`, `JOIN K7QD`, `ROOM K7QD`, `PAIRED`) and room codes. |
+| `relay_link`  | The browser's `Opponent`: runs the lobby and the handshake over any message socket, then relays the game protocol. |
+| `net`         | (game crate, desktop only) TCP host and join, with a version handshake (`HELLO BATTLESHIP 2`), background reader threads, disconnect detection and address parsing. |
 | `setup`       | `FleetEditor`: interactive fleet placement (select, rotate, drop, pick up). |
 | `sound`       | Sound effects synthesised into in-memory WAV files at start-up, so the game needs no asset files. |
 | `rng`         | A seedable SplitMix64 generator, so tests are deterministic. |
@@ -139,6 +195,8 @@ into the next, which the rematch tests exposed. The suite covers:
 * protocol round trips and rejection of malformed input,
 * real TCP sockets on localhost: handshake, message exchange, disconnects, version
   mismatch, strangers on the port, and freeing the port,
+* the relay server over real WebSockets: rooms, pairing, relaying, players leaving,
+  and the browser's `RelayLink` playing through it,
 * WAV encoding, checked with the same decoder the audio backend uses.
 
 ### Mutation testing
@@ -151,7 +209,7 @@ behaviour nothing checks.
 ```sh
 cargo install --locked cargo-mutants
 cargo mutants                              # every mutant (several minutes)
-cargo mutants -f src/ai.rs                 # one file
+cargo mutants -f crates/core/src/ai.rs     # one file
 git diff origin/main... > pr.diff && cargo mutants --in-diff pr.diff   # only your changes
 ```
 
@@ -159,22 +217,25 @@ The results land in `mutants.out/`: `missed.txt` lists the mutants no test caugh
 Every mutant that compiles should be caught, or make the tests hang until the timeout,
 which also counts as caught.
 
-`.cargo/mutants.toml` skips `src/main.rs` and lists the few mutants no test can catch,
+`.cargo/mutants.toml` skips the rendering shell, the browser-only socket and the
+server's `main.rs`, and lists the few mutants no test can catch,
 each with its reason. Some are equivalent (they behave exactly like the original),
 some depend on the machine (network routes, the clock), and some only change how a
 sound effect sounds.
 
 ## Credits
 
-The font is DejaVu Sans Bold (see `assets/DejaVu-LICENSE.txt`). The lab is from
+The font is DejaVu Sans Bold (see `crates/game/assets/DejaVu-LICENSE.txt`). The lab is from
 *Essential Test-Driven Development* by Rob Myers.
 
 ## Releases
 
-CI (`.github/workflows/ci.yml`) checks formatting, runs clippy and runs the tests on
-every push and pull request. `.github/workflows/mutants.yml` runs mutation testing on
-the lines each pull request changes and fails if a mutant survives. It also runs
-against the whole library every Monday and on demand.
+CI (`.github/workflows/ci.yml`) checks formatting, runs clippy and the tests on every
+push and pull request, builds the browser version, and builds the Docker image and
+plays an online game against it in two headless browsers.
+`.github/workflows/mutants.yml` runs mutation testing on the lines each pull request
+changes and fails if a mutant survives. It also runs against the whole workspace every
+Monday and on demand.
 
 Releases follow [semantic versioning](https://semver.org). To publish one, run the
 release script from an up-to-date `main`:
@@ -191,5 +252,6 @@ version, commit, and push a tag such as `v0.2.0`.
 
 `.github/workflows/release.yml` checks that the tag matches `Cargo.toml` and runs the
 tests. It then builds the binary for Linux x86_64, Windows x86_64 and macOS arm64 and
-attaches them to a new GitHub release. Tags with a suffix such as `v1.0.0-rc.1` are
+attaches them to a new GitHub release, and publishes the web version's Docker image to
+`ghcr.io/grenadecx/battleship`. Tags with a suffix such as `v1.0.0-rc.1` are
 published as pre-releases.

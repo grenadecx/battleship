@@ -1,7 +1,8 @@
 name: Release
 
-# Push a semver tag matching the version in Cargo.toml to publish a release:
-#   git tag v0.1.0 && git push origin v0.1.0
+# Push a semver tag matching the version in Cargo.toml to publish a release
+# (scripts/release.sh does it all). It publishes the desktop builds on the GitHub
+# release and the web version as a Docker image on ghcr.io.
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
@@ -30,7 +31,7 @@ jobs:
           echo "version=$crate_version" >> "$GITHUB_OUTPUT"
       - name: Install system libraries
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libx11-dev libxi-dev libgl1-mesa-dev
-      - run: cargo test --release
+      - run: cargo test --release --workspace
 
   build:
     needs: verify
@@ -59,7 +60,7 @@ jobs:
       - name: Install system libraries
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libx11-dev libxi-dev libgl1-mesa-dev
-      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - run: cargo build --release --locked -p battleship --target ${{ matrix.target }}
       - name: Package
         shell: bash
         run: |
@@ -70,7 +71,7 @@ jobs:
           else
             cp "target/${{ matrix.target }}/release/battleship" "$dist/"
           fi
-          cp README.md assets/DejaVu-LICENSE.txt "$dist/"
+          cp README.md crates/game/assets/DejaVu-LICENSE.txt "$dist/"
           if [ "${{ runner.os }}" = "Windows" ]; then
             7z a "$dist.zip" "$dist" >/dev/null
           else
@@ -95,3 +96,27 @@ jobs:
           files: dist/*
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
+
+  # The web version: tagged with the version, and "latest" unless a pre-release.
+  docker:
+    needs: verify
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build and push to ghcr.io
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker build -t "$image:$VERSION" .
+          docker push "$image:$VERSION"
+          if [[ $VERSION != *-* ]]; then
+            docker tag "$image:$VERSION" "$image:latest"
+            docker push "$image:latest"
+          fi
+          echo "Published \`$image:$VERSION\`" >> "$GITHUB_STEP_SUMMARY"

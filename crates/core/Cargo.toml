@@ -1,0 +1,9 @@
+[package]
+name = "battleship-core"
+version.workspace = true
+edition.workspace = true
+description = "Battleship rules, computer opponent and wire protocols, shared by the game and the server"
+
+[dev-dependencies]
+# The decoder macroquad's audio backend uses; lets tests prove our WAVs load.
+audrey = { version = "0.3", default-features = false, features = ["wav"] }

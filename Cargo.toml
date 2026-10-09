@@ -1,12 +1,14 @@
-[package]
-name = "battleship"
+[workspace]
+members = ["crates/core", "crates/game", "crates/server"]
+resolver = "3"
+
+# The version every crate shares; scripts/release.sh bumps it here.
+[workspace.package]
 version = "0.2.0"
 edition = "2024"
-description = "Battleship with a computer opponent and P2P TCP multiplayer"
-build = "build.rs"
 
-[dependencies]
-macroquad = { version = "0.4", features = ["audio"] }
+[workspace.dependencies]
+battleship-core = { path = "crates/core" }
 
 [profile.dev.package."*"]
 opt-level = 2
@@ -15,7 +17,3 @@ opt-level = 2
 lto = true
 codegen-units = 1
 strip = true
-
-[dev-dependencies]
-# The decoder macroquad's audio backend uses; lets tests prove our WAVs load.
-audrey = { version = "0.3", default-features = false, features = ["wav"] }

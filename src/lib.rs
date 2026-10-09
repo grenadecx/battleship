@@ -1,5 +1,6 @@
 //! Battleship game logic. Everything here is UI-agnostic and test-driven;
-//! `main.rs` is a thin graphical shell around it.
+//! `main.rs` is a thin graphical shell around it. Unit tests for each module
+//! live in `src/tests/`.
 
 pub mod ai;
 pub mod domain;

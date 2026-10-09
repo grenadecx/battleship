@@ -106,12 +106,18 @@ The font is DejaVu Sans Bold (see `assets/DejaVu-LICENSE.txt`). The lab is from
 CI (`.github/workflows/ci.yml`) checks formatting, runs clippy and runs the tests on
 every push and pull request.
 
-Releases follow [semantic versioning](https://semver.org). To publish one, bump
-`version` in `Cargo.toml`, commit, and push a matching tag:
+Releases follow [semantic versioning](https://semver.org). To publish one, run the
+release script from an up-to-date `main`:
 
 ```sh
-git tag v0.2.0 && git push origin v0.2.0
+scripts/release.sh minor              # or patch, major, or a version such as 1.0.0-rc.1
+scripts/release.sh minor --dry-run    # only run the checks
 ```
+
+It runs the same checks as CI, shows the changes since the last release and asks for
+confirmation. It then bumps `version` in `Cargo.toml`, commits, and pushes the commit
+together with a matching `v` tag. To release by hand instead, do the same: bump the
+version, commit, and push a tag such as `v0.2.0`.
 
 `.github/workflows/release.yml` checks that the tag matches `Cargo.toml` and runs the
 tests. It then builds the binary for Linux x86_64, Windows x86_64 and macOS arm64 and

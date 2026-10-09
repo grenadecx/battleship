@@ -52,6 +52,8 @@ impl Rng {
 mod tests {
     use super::*;
 
+    const DRAWS: usize = 1000;
+
     #[test]
     fn same_seed_gives_same_sequence() {
         let mut a = Rng::new(42);
@@ -63,37 +65,39 @@ mod tests {
 
     #[test]
     fn different_seeds_give_different_sequences() {
-        let mut a = Rng::new(1);
-        let mut b = Rng::new(2);
-        assert_ne!(a.next_u64(), b.next_u64());
+        assert_ne!(Rng::new(1).next_u64(), Rng::new(2).next_u64());
     }
 
     #[test]
-    fn below_stays_in_range_and_covers_it() {
+    fn below_stays_in_range() {
+        let mut rng = Rng::new(7);
+        assert!((0..DRAWS).all(|_| rng.below(6) < 6));
+    }
+
+    #[test]
+    fn below_covers_the_whole_range() {
         let mut rng = Rng::new(7);
         let mut seen = [false; 6];
-        for _ in 0..1000 {
-            let v = rng.below(6);
-            assert!(v < 6);
-            seen[v] = true;
+        for _ in 0..DRAWS {
+            seen[rng.below(6)] = true;
         }
-        assert!(seen.iter().all(|s| *s));
+        assert_eq!(seen, [true; 6]);
     }
 
     #[test]
     fn next_f32_is_in_unit_interval() {
         let mut rng = Rng::new(9);
-        for _ in 0..1000 {
-            let v = rng.next_f32();
-            assert!((0.0..1.0).contains(&v));
-        }
+        assert!((0..DRAWS).all(|_| (0.0..1.0).contains(&rng.next_f32())));
     }
 
     #[test]
     fn pick_from_empty_slice_is_none() {
-        let mut rng = Rng::new(3);
         let empty: [u8; 0] = [];
-        assert_eq!(rng.pick(&empty), None);
-        assert_eq!(rng.pick(&[5]), Some(&5));
+        assert_eq!(Rng::new(3).pick(&empty), None);
+    }
+
+    #[test]
+    fn pick_from_a_single_item_returns_it() {
+        assert_eq!(Rng::new(3).pick(&[5]), Some(&5));
     }
 }

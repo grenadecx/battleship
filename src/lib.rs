@@ -11,3 +11,5 @@ pub mod rng;
 pub mod session;
 pub mod setup;
 pub mod sound;
+#[cfg(test)]
+mod test_support;

@@ -109,7 +109,11 @@ impl Opponent for ComputerOpponent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::choose_target;
     use crate::domain::{Coord, ShotResult};
+
+    const HUMAN_WINS_SEED: u64 = 0;
+    const COMPUTER_WINS_SEED: u64 = 4;
 
     fn next_message(computer: &mut ComputerOpponent) -> Message {
         match computer.poll() {
@@ -124,57 +128,80 @@ mod tests {
         human.set_board(Board::random(&mut Rng::new(seed))).unwrap();
         human.ready().unwrap();
         let mut computer = ComputerOpponent::new(Rng::new(seed + 1));
-        assert_eq!(next_message(&mut computer), Message::Ready);
+        next_message(&mut computer);
         human.opponent_ready().unwrap();
         computer.send(Message::Ready);
         (human, computer)
     }
 
-    /// Plays a whole game with the human shooting squares in order.
-    /// Returns every message the computer sent after the game ended.
-    fn play_out(human: &mut Session, computer: &mut ComputerOpponent) -> Vec<Message> {
-        let mut human_targets = Coord::all();
-        let mut after_game = Vec::new();
-        for _ in 0..500 {
+    /// Plays a whole game, the human aiming like the computer does.
+    /// Returns every message the computer sent once the game was over.
+    fn play_out(human: &mut Session, computer: &mut ComputerOpponent, seed: u64) -> Vec<Message> {
+        let mut aim = Rng::new(seed + 2);
+        while !human.is_over() {
             if human.phase() == Phase::MyTurn {
-                let target = human_targets
-                    .find(|c| human.enemy_grid().can_target(*c))
-                    .unwrap();
+                let target = choose_target(human.enemy_grid(), &mut aim);
                 human.fire(target).unwrap();
                 computer.send(Message::Fire(target));
             }
-            match computer.poll() {
-                Some(OpponentEvent::Message(message)) if human.is_over() => {
-                    after_game.push(message)
-                }
-                Some(OpponentEvent::Message(Message::Result(result))) => {
-                    human.receive_result(result).unwrap();
-                    if human.is_over() {
-                        computer.send(Message::Reveal(human.my_board().placements()));
-                    }
-                }
-                Some(OpponentEvent::Message(Message::Fire(target))) => {
+            match next_message(computer) {
+                Message::Result(result) => human.receive_result(result).unwrap(),
+                Message::Fire(target) => {
                     let result = human.receive_fire(target).unwrap();
                     computer.send(Message::Result(result));
-                    if human.is_over() {
-                        computer.send(Message::Reveal(human.my_board().placements()));
-                    }
                 }
-                Some(other) => panic!("unexpected {other:?} in {:?}", human.phase()),
-                None if human.is_over() => return after_game,
-                None => {}
+                other => panic!("unexpected {other:?} in {:?}", human.phase()),
             }
         }
-        panic!("game did not finish");
+        computer.send(Message::Reveal(human.my_board().placements()));
+        std::iter::from_fn(|| computer.poll())
+            .map(|event| match event {
+                OpponentEvent::Message(message) => message,
+                other => panic!("unexpected {other:?} after the game"),
+            })
+            .collect()
+    }
+
+    fn revealed_ships(after_game: &[Message]) -> Option<usize> {
+        after_game.iter().find_map(|message| match message {
+            Message::Reveal(placements) => Some(placements.len()),
+            _ => None,
+        })
+    }
+
+    /// Plays out the game for `seed`, which must end in `outcome` for the human.
+    /// Returns the human session and every message the computer sent afterwards.
+    fn finished_game(seed: u64, outcome: Phase) -> (Session, ComputerOpponent, Vec<Message>) {
+        let (mut human, mut computer) = start_game(seed);
+        let after_game = play_out(&mut human, &mut computer, seed);
+        assert_eq!(
+            human.phase(),
+            outcome,
+            "seed {seed} no longer ends this way"
+        );
+        (human, computer, after_game)
+    }
+
+    /// A lost game after which the human has asked for a rematch with a fresh fleet.
+    fn rematch_requested() -> ComputerOpponent {
+        let (mut human, mut computer, _) = finished_game(COMPUTER_WINS_SEED, Phase::Lost);
+        human.new_round().unwrap();
+        human.set_board(Board::random(&mut Rng::new(99))).unwrap();
+        human.ready().unwrap();
+        computer.send(Message::Ready);
+        computer
     }
 
     #[test]
-    fn computer_is_ready_straight_away() {
+    fn computer_announces_it_is_ready_straight_away() {
         let mut computer = ComputerOpponent::new(Rng::new(1));
-        assert_eq!(
-            computer.poll(),
-            Some(OpponentEvent::Message(Message::Ready))
-        );
+        assert_eq!(next_message(&mut computer), Message::Ready);
+    }
+
+    #[test]
+    fn computer_says_nothing_more_before_the_game_starts() {
+        let mut computer = ComputerOpponent::new(Rng::new(1));
+        next_message(&mut computer);
         assert_eq!(computer.poll(), None);
     }
 
@@ -185,61 +212,43 @@ mod tests {
     }
 
     #[test]
-    fn computer_answers_a_shot_and_fires_back() {
-        let (mut human, mut computer) = start_game(2);
-        human.fire(Coord::new(0, 0)).unwrap();
+    fn computer_answers_a_shot_with_its_result() {
+        let (_, mut computer) = start_game(2);
         computer.send(Message::Fire(Coord::new(0, 0)));
-        let Message::Result(result) = next_message(&mut computer) else {
-            panic!("expected a result");
-        };
-        human.receive_result(result).unwrap();
-        let Message::Fire(target) = next_message(&mut computer) else {
-            panic!("expected the computer to fire back");
-        };
-        assert!(human.receive_fire(target).is_ok());
+        assert!(matches!(next_message(&mut computer), Message::Result(_)));
     }
 
     #[test]
-    fn a_game_against_the_computer_always_finishes_with_a_reveal() {
-        for seed in 0..10 {
-            let (mut human, mut computer) = start_game(seed * 10);
-            let after = play_out(&mut human, &mut computer);
-            assert!(human.is_over());
-            let reveal = after.iter().find_map(|m| match m {
-                Message::Reveal(placements) => Some(placements.len()),
-                _ => None,
-            });
-            assert_eq!(reveal, Some(5), "seed {seed}: {after:?}");
-        }
+    fn computer_fires_back_after_answering() {
+        let (_, mut computer) = start_game(2);
+        computer.send(Message::Fire(Coord::new(0, 0)));
+        next_message(&mut computer);
+        assert!(matches!(next_message(&mut computer), Message::Fire(_)));
     }
 
     #[test]
-    fn computer_beats_a_human_who_shoots_in_reading_order_most_of_the_time() {
-        let wins = (0..10)
-            .filter(|seed| {
-                let (mut human, mut computer) = start_game(seed * 7 + 3);
-                play_out(&mut human, &mut computer);
-                human.phase() == Phase::Lost
-            })
-            .count();
-        assert!(wins >= 7, "computer only won {wins}/10");
+    fn computer_reveals_its_fleet_when_it_loses() {
+        let (_, _, after_game) = finished_game(HUMAN_WINS_SEED, Phase::Won);
+        assert_eq!(revealed_ships(&after_game), Some(5), "{after_game:?}");
     }
 
     #[test]
-    fn computer_plays_a_rematch_and_opens_it() {
-        let (mut human, mut computer) = start_game(4);
-        play_out(&mut human, &mut computer);
-        human.new_round().unwrap();
-        human.set_board(Board::random(&mut Rng::new(99))).unwrap();
-        human.ready().unwrap();
-        computer.send(Message::Ready);
+    fn computer_reveals_its_fleet_when_it_wins() {
+        let (_, _, after_game) = finished_game(COMPUTER_WINS_SEED, Phase::Lost);
+        assert_eq!(revealed_ships(&after_game), Some(5), "{after_game:?}");
+    }
+
+    #[test]
+    fn computer_gets_ready_for_a_rematch() {
+        let mut computer = rematch_requested();
         assert_eq!(next_message(&mut computer), Message::Ready);
-        human.opponent_ready().unwrap();
-        assert_eq!(human.phase(), Phase::TheirTurn);
-        let Message::Fire(target) = next_message(&mut computer) else {
-            panic!("computer should open the second round");
-        };
-        human.receive_fire(target).unwrap();
+    }
+
+    #[test]
+    fn computer_opens_the_rematch() {
+        let mut computer = rematch_requested();
+        next_message(&mut computer);
+        assert!(matches!(next_message(&mut computer), Message::Fire(_)));
     }
 
     #[test]

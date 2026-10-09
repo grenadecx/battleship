@@ -68,7 +68,7 @@ pub fn local_ip_addresses() -> Vec<IpAddr> {
         let socket = std::net::UdpSocket::bind(bind).ok()?;
         socket.connect(target).ok()?;
         let ip = socket.local_addr().ok()?.ip();
-        (!ip.is_loopback() && !ip.is_unspecified()).then_some(ip)
+        is_shareable(ip).then_some(ip)
     };
     [
         probe("0.0.0.0:0", "8.8.8.8:80"),
@@ -83,6 +83,11 @@ pub fn local_ip_addresses() -> Vec<IpAddr> {
         }
         found
     })
+}
+
+/// Whether another machine could reach us on `ip`.
+fn is_shareable(ip: IpAddr) -> bool {
+    !ip.is_loopback() && !ip.is_unspecified()
 }
 
 /// Exchanges HELLO with the peer and starts the background reader.
@@ -308,8 +313,10 @@ mod tests {
     use crate::domain::{Coord, ShotResult};
     use std::time::Instant;
 
+    const TIMEOUT: Duration = Duration::from_secs(10);
+
     fn wait_for<T>(mut poll: impl FnMut() -> Option<T>) -> T {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + TIMEOUT;
         loop {
             if let Some(value) = poll() {
                 return value;
@@ -327,57 +334,101 @@ mod tests {
         (hosted, guest)
     }
 
-    #[test]
-    fn parses_addresses() {
-        assert_eq!(
-            parse_address("192.168.1.20"),
-            Ok("192.168.1.20:7777".into())
-        );
-        assert_eq!(parse_address(" 10.0.0.5:9000 "), Ok("10.0.0.5:9000".into()));
-        assert_eq!(parse_address("localhost"), Ok("localhost:7777".into()));
-        assert_eq!(parse_address("example.com:80"), Ok("example.com:80".into()));
-        assert_eq!(parse_address("[::1]"), Ok("[::1]:7777".into()));
-        assert_eq!(parse_address("::1"), Ok("[::1]:7777".into()));
-        assert_eq!(parse_address("[::1]:8000"), Ok("[::1]:8000".into()));
-        assert!(parse_address("").is_err());
-        assert!(parse_address("1.2.3.4:").is_err());
-        assert!(parse_address("1.2.3.4:99999").is_err());
-        assert!(parse_address("1.2.3.4:abc").is_err());
-        assert!(parse_address("has space:80").is_err());
+    /// Connects to the host, sends `greeting` and blocks until the host hangs up.
+    fn greet_host(host: &Host, greeting: &[u8]) {
+        let mut stranger = TcpStream::connect(("127.0.0.1", host.port())).unwrap();
+        stranger.set_read_timeout(Some(TIMEOUT)).unwrap();
+        stranger.write_all(greeting).unwrap();
+        stranger.read_to_end(&mut Vec::new()).unwrap();
     }
 
     #[test]
-    fn local_addresses_are_not_loopback() {
-        assert!(local_ip_addresses().iter().all(|ip| !ip.is_loopback()));
+    fn parses_valid_addresses() {
+        for (input, expected) in [
+            ("192.168.1.20", "192.168.1.20:7777"),
+            (" 10.0.0.5:9000 ", "10.0.0.5:9000"),
+            ("localhost", "localhost:7777"),
+            ("example.com:80", "example.com:80"),
+            ("[::1]", "[::1]:7777"),
+            ("::1", "[::1]:7777"),
+            ("[::1]:8000", "[::1]:8000"),
+        ] {
+            assert_eq!(parse_address(input), Ok(expected.into()), "{input:?}");
+        }
     }
 
     #[test]
-    fn host_and_guest_exchange_messages_both_ways() {
+    fn rejects_invalid_addresses() {
+        for input in [
+            "",
+            "1.2.3.4:",
+            "1.2.3.4:99999",
+            "1.2.3.4:abc",
+            "has space:80",
+        ] {
+            assert!(parse_address(input).is_err(), "accepted {input:?}");
+        }
+    }
+
+    #[test]
+    fn loopback_addresses_are_not_shared() {
+        assert!(!is_shareable("127.0.0.1".parse().unwrap()));
+        assert!(!is_shareable("::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn unspecified_addresses_are_not_shared() {
+        assert!(!is_shareable("0.0.0.0".parse().unwrap()));
+        assert!(!is_shareable("::".parse().unwrap()));
+    }
+
+    #[test]
+    fn lan_addresses_are_shared() {
+        assert!(is_shareable("192.168.1.20".parse().unwrap()));
+    }
+
+    #[test]
+    fn host_receives_what_the_guest_sends() {
         let (mut host, mut guest) = connected_pair();
         guest.send(Message::Fire(Coord::new(3, 4)));
         assert_eq!(
             wait_for(|| host.poll()),
             OpponentEvent::Message(Message::Fire(Coord::new(3, 4)))
         );
+    }
+
+    #[test]
+    fn guest_receives_what_the_host_sends_in_order() {
+        let (mut host, mut guest) = connected_pair();
         host.send(Message::Result(ShotResult::Hit));
         host.send(Message::Ready);
         assert_eq!(
-            wait_for(|| guest.poll()),
-            OpponentEvent::Message(Message::Result(ShotResult::Hit))
+            [wait_for(|| guest.poll()), wait_for(|| guest.poll())],
+            [
+                OpponentEvent::Message(Message::Result(ShotResult::Hit)),
+                OpponentEvent::Message(Message::Ready)
+            ]
         );
+    }
+
+    #[test]
+    fn host_does_not_see_the_handshake() {
+        let (mut host, mut guest) = connected_pair();
+        guest.send(Message::Ready);
+        assert_eq!(
+            wait_for(|| host.poll()),
+            OpponentEvent::Message(Message::Ready)
+        );
+    }
+
+    #[test]
+    fn guest_does_not_see_the_handshake() {
+        let (mut host, mut guest) = connected_pair();
+        host.send(Message::Ready);
         assert_eq!(
             wait_for(|| guest.poll()),
             OpponentEvent::Message(Message::Ready)
         );
-        assert_eq!(guest.poll(), None);
-    }
-
-    #[test]
-    fn handshake_is_not_passed_on_to_the_game() {
-        let (mut host, mut guest) = connected_pair();
-        thread::sleep(Duration::from_millis(50));
-        assert_eq!(host.poll(), None);
-        assert_eq!(guest.poll(), None);
     }
 
     #[test]
@@ -391,12 +442,19 @@ mod tests {
     }
 
     #[test]
-    fn disconnect_is_reported_once_and_sending_afterwards_is_harmless() {
+    fn disconnect_is_reported_only_once() {
+        let (host, mut guest) = connected_pair();
+        drop(host);
+        wait_for(|| guest.poll());
+        assert_eq!(guest.poll(), None);
+    }
+
+    #[test]
+    fn sending_after_a_disconnect_is_harmless() {
         let (host, mut guest) = connected_pair();
         drop(host);
         wait_for(|| guest.poll());
         guest.send(Message::Ready);
-        thread::sleep(Duration::from_millis(50));
         assert_eq!(guest.poll(), None);
     }
 
@@ -417,18 +475,25 @@ mod tests {
     }
 
     #[test]
-    fn host_ignores_strangers_and_keeps_waiting() {
+    fn host_turns_away_a_client_that_is_not_a_battleship_game() {
         let mut host = Host::start(0).unwrap();
-        let mut stranger = TcpStream::connect(("127.0.0.1", host.port())).unwrap();
-        stranger.write_all(b"GET / HTTP/1.1\r\n\r\n").unwrap();
-        let mut wrong_version = TcpStream::connect(("127.0.0.1", host.port())).unwrap();
-        wrong_version.write_all(b"HELLO BATTLESHIP 999\n").unwrap();
-        thread::sleep(Duration::from_millis(100));
+        greet_host(&host, b"GET / HTTP/1.1\r\n\r\n");
         assert!(host.poll().is_none());
+    }
 
+    #[test]
+    fn host_turns_away_a_client_with_another_protocol_version() {
+        let mut host = Host::start(0).unwrap();
+        greet_host(&host, b"HELLO BATTLESHIP 999\n");
+        assert!(host.poll().is_none());
+    }
+
+    #[test]
+    fn host_keeps_waiting_after_turning_a_stranger_away() {
+        let host = Host::start(0).unwrap();
+        greet_host(&host, b"GET / HTTP/1.1\r\n\r\n");
         let mut joining = join(&format!("127.0.0.1:{}", host.port()));
         assert!(wait_for(|| joining.poll()).is_ok());
-        assert!(wait_for(|| host.poll()).peer().ip().is_loopback());
     }
 
     #[test]
@@ -438,7 +503,7 @@ mod tests {
         thread::spawn(move || {
             let (mut socket, _) = listener.accept().unwrap();
             socket.write_all(b"HELLO BATTLESHIP 999\n").unwrap();
-            thread::sleep(Duration::from_millis(500));
+            let _ = socket.read_to_end(&mut Vec::new());
         });
         let mut joining = join(&format!("127.0.0.1:{port}"));
         let error = wait_for(|| joining.poll())
@@ -452,7 +517,7 @@ mod tests {
         let host = Host::start(0).unwrap();
         let port = host.port();
         drop(host);
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + TIMEOUT;
         while Host::start(port).is_err() {
             assert!(Instant::now() < deadline, "port {port} still in use");
             thread::sleep(Duration::from_millis(20));

@@ -137,10 +137,7 @@ mod tests {
     use super::*;
     use crate::domain::{Board, FLEET};
     use crate::rng::Rng;
-
-    fn c(x: u8, y: u8) -> Coord {
-        Coord::new(x, y)
-    }
+    use crate::test_support::{c, sunk};
 
     fn round_trip(message: Message) {
         let line = message.encode();
@@ -150,22 +147,22 @@ mod tests {
 
     #[test]
     fn encodes_the_simple_messages() {
-        assert_eq!(Message::Hello { version: 1 }.encode(), "HELLO BATTLESHIP 1");
-        assert_eq!(Message::Ready.encode(), "READY");
-        assert_eq!(Message::Fire(c(3, 7)).encode(), "FIRE 3 7");
-        assert_eq!(Message::Result(ShotResult::Miss).encode(), "RESULT MISS");
-        assert_eq!(Message::Result(ShotResult::Hit).encode(), "RESULT HIT");
-        assert_eq!(Message::Bye.encode(), "BYE");
+        for (message, line) in [
+            (Message::Hello { version: 1 }, "HELLO BATTLESHIP 1"),
+            (Message::Ready, "READY"),
+            (Message::Fire(c(3, 7)), "FIRE 3 7"),
+            (Message::Result(ShotResult::Miss), "RESULT MISS"),
+            (Message::Result(ShotResult::Hit), "RESULT HIT"),
+            (Message::Bye, "BYE"),
+        ] {
+            assert_eq!(message.encode(), line, "{message:?}");
+        }
     }
 
     #[test]
     fn encodes_a_sinking_with_the_ship_squares() {
-        let sunk = ShotResult::Sunk {
-            kind: ShipKind::Destroyer,
-            cells: vec![c(3, 7), c(4, 7)],
-        };
         assert_eq!(
-            Message::Result(sunk).encode(),
+            Message::Result(sunk(ShipKind::Destroyer, &[c(3, 7), c(4, 7)])).encode(),
             "RESULT SUNK Destroyer 3,7 4,7"
         );
     }
@@ -180,10 +177,10 @@ mod tests {
         round_trip(Message::Fire(c(9, 9)));
         round_trip(Message::Result(ShotResult::Miss));
         round_trip(Message::Result(ShotResult::Hit));
-        round_trip(Message::Result(ShotResult::Sunk {
-            kind: ShipKind::Carrier,
-            cells: (0..5).map(|y| c(9, y)).collect(),
-        }));
+        round_trip(Message::Result(sunk(
+            ShipKind::Carrier,
+            &[c(9, 0), c(9, 1), c(9, 2), c(9, 3), c(9, 4)],
+        )));
         round_trip(Message::Reveal(
             Board::random(&mut Rng::new(4)).placements(),
         ));

@@ -99,14 +99,32 @@ fn best_hunting_squares(grid: &TargetGrid) -> Vec<Coord> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{Board, ShipKind, ShotResult};
+    use crate::domain::{Board, ShotResult};
+    use crate::test_support::c;
 
-    fn c(x: u8, y: u8) -> Coord {
-        Coord::new(x, y)
+    const SEEDS: u64 = 20;
+    const GAMES: u64 = 60;
+    /// Shooting at random squares needs about 95 shots to sink a whole fleet.
+    const MAX_AVERAGE_SHOTS: u64 = 60;
+
+    /// The AI only ever picks one of `allowed`, whatever its random seed.
+    fn assert_targets_only(grid: &TargetGrid, allowed: &[Coord]) {
+        for seed in 0..SEEDS {
+            let target = choose_target(grid, &mut Rng::new(seed));
+            assert!(allowed.contains(&target), "seed {seed} chose {target:?}");
+        }
     }
 
-    /// Plays the computer against a board until the fleet is sunk; returns the number of shots.
-    fn shots_to_win(board_seed: u64, ai_seed: u64) -> usize {
+    fn grid_with(shots: &[(Coord, ShotResult)]) -> TargetGrid {
+        let mut grid = TargetGrid::new();
+        for (square, result) in shots {
+            grid.record(*square, result).unwrap();
+        }
+        grid
+    }
+
+    /// Plays the computer against a random board until the fleet is sunk; returns the number of shots.
+    fn shots_to_win(board_seed: u64, ai_seed: u64) -> u64 {
         let mut board = Board::random(&mut Rng::new(board_seed));
         let mut grid = TargetGrid::new();
         let mut rng = Rng::new(ai_seed);
@@ -118,115 +136,67 @@ mod tests {
                 .expect("AI must never fire at the same square twice");
             grid.record(target, &result).unwrap();
             shots += 1;
-            assert!(shots <= 100, "AI took more than 100 shots");
         }
         shots
     }
 
     #[test]
-    fn opens_on_an_untouched_board() {
-        let grid = TargetGrid::new();
-        let target = choose_target(&grid, &mut Rng::new(1));
-        assert!(grid.can_target(target));
+    fn opens_in_the_middle_of_an_empty_board() {
+        assert_targets_only(&TargetGrid::new(), &[c(4, 4), c(4, 5), c(5, 4), c(5, 5)]);
     }
 
     #[test]
-    fn never_targets_known_squares() {
+    fn targets_the_only_square_left() {
+        let last = c(7, 3);
         let mut grid = TargetGrid::new();
-        let mut rng = Rng::new(3);
-        for co in Coord::all().filter(|co| (co.x + co.y) % 3 != 0) {
-            grid.record(co, &ShotResult::Miss).unwrap();
+        for square in Coord::all().filter(|square| *square != last) {
+            grid.record(square, &ShotResult::Miss).unwrap();
         }
-        for _ in 0..50 {
-            assert!(grid.can_target(choose_target(&grid, &mut rng)));
-        }
+        assert_targets_only(&grid, &[last]);
     }
 
     #[test]
     fn after_a_single_hit_shoots_next_to_it() {
-        let mut grid = TargetGrid::new();
-        grid.record(c(5, 5), &ShotResult::Hit).unwrap();
-        for seed in 0..20 {
-            let target = choose_target(&grid, &mut Rng::new(seed));
-            assert!(
-                c(5, 5).orthogonal_neighbors().contains(&target),
-                "{target:?}"
-            );
-        }
+        let grid = grid_with(&[(c(5, 5), ShotResult::Hit)]);
+        assert_targets_only(&grid, &[c(5, 4), c(4, 5), c(6, 5), c(5, 6)]);
     }
 
     #[test]
     fn follows_a_horizontal_line_of_hits() {
-        let mut grid = TargetGrid::new();
-        grid.record(c(4, 5), &ShotResult::Hit).unwrap();
-        grid.record(c(5, 5), &ShotResult::Hit).unwrap();
-        for seed in 0..20 {
-            let target = choose_target(&grid, &mut Rng::new(seed));
-            assert!([c(3, 5), c(6, 5)].contains(&target), "{target:?}");
-        }
+        let grid = grid_with(&[(c(4, 5), ShotResult::Hit), (c(5, 5), ShotResult::Hit)]);
+        assert_targets_only(&grid, &[c(3, 5), c(6, 5)]);
     }
 
     #[test]
     fn follows_a_vertical_line_away_from_a_blocked_end() {
-        let mut grid = TargetGrid::new();
-        grid.record(c(2, 0), &ShotResult::Miss).unwrap();
-        grid.record(c(2, 1), &ShotResult::Hit).unwrap();
-        grid.record(c(2, 2), &ShotResult::Hit).unwrap();
-        for seed in 0..10 {
-            assert_eq!(choose_target(&grid, &mut Rng::new(seed)), c(2, 3));
-        }
+        let grid = grid_with(&[
+            (c(2, 0), ShotResult::Miss),
+            (c(2, 1), ShotResult::Hit),
+            (c(2, 2), ShotResult::Hit),
+        ]);
+        assert_targets_only(&grid, &[c(2, 3)]);
     }
 
     #[test]
     fn follows_a_line_that_starts_at_the_board_edge() {
-        let mut grid = TargetGrid::new();
-        grid.record(c(0, 9), &ShotResult::Hit).unwrap();
-        grid.record(c(1, 9), &ShotResult::Hit).unwrap();
-        assert_eq!(choose_target(&grid, &mut Rng::new(0)), c(2, 9));
+        let grid = grid_with(&[(c(0, 9), ShotResult::Hit), (c(1, 9), ShotResult::Hit)]);
+        assert_targets_only(&grid, &[c(2, 9)]);
     }
 
     #[test]
-    fn hunts_away_from_sunk_ships() {
-        let mut grid = TargetGrid::new();
-        grid.record(
-            c(0, 0),
-            &ShotResult::Sunk {
-                kind: ShipKind::Destroyer,
-                cells: vec![c(0, 0), c(1, 0)],
-            },
-        )
-        .unwrap();
-        for seed in 0..20 {
-            let target = choose_target(&grid, &mut Rng::new(seed));
-            assert!(grid.can_target(target));
-        }
-    }
-
-    #[test]
-    fn hunting_prefers_open_ocean_over_cramped_corners() {
-        let grid = TargetGrid::new();
-        for seed in 0..20 {
-            let target = choose_target(&grid, &mut Rng::new(seed));
-            assert!(
-                (2..=7).contains(&target.x) && (2..=7).contains(&target.y),
-                "{target:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn always_sinks_the_whole_fleet() {
-        for seed in 0..60 {
+    fn never_fires_twice_at_a_square_while_sinking_a_fleet() {
+        for seed in 0..GAMES {
             shots_to_win(seed, seed + 1000);
         }
     }
 
     #[test]
     fn plays_much_better_than_random_shooting() {
-        let games = 60;
-        let total: usize = (0..games).map(|s| shots_to_win(s + 500, s)).sum();
-        let average = total as f64 / games as f64;
-        // Random shooting needs ~95 shots on average.
-        assert!(average < 60.0, "average shots {average}");
+        let total: u64 = (0..GAMES).map(|seed| shots_to_win(seed + 500, seed)).sum();
+        assert!(
+            total < GAMES * MAX_AVERAGE_SHOTS,
+            "average shots {}",
+            total / GAMES
+        );
     }
 }

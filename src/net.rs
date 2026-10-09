@@ -68,7 +68,7 @@ pub fn local_ip_addresses() -> Vec<IpAddr> {
         let socket = std::net::UdpSocket::bind(bind).ok()?;
         socket.connect(target).ok()?;
         let ip = socket.local_addr().ok()?.ip();
-        (!ip.is_loopback() && !ip.is_unspecified()).then_some(ip)
+        is_shareable(ip).then_some(ip)
     };
     [
         probe("0.0.0.0:0", "8.8.8.8:80"),
@@ -83,6 +83,11 @@ pub fn local_ip_addresses() -> Vec<IpAddr> {
         }
         found
     })
+}
+
+/// Whether another machine could reach us on `ip`.
+fn is_shareable(ip: IpAddr) -> bool {
+    !ip.is_loopback() && !ip.is_unspecified()
 }
 
 /// Exchanges HELLO with the peer and starts the background reader.

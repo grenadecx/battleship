@@ -14,3 +14,6 @@ pub mod rng;
 pub mod session;
 pub mod setup;
 pub mod sound;
+#[cfg(test)]
+#[path = "tests/support.rs"]
+mod test_support;

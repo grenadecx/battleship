@@ -17,7 +17,12 @@ pids=()
 cleanup() {
     kill "${pids[@]}" 2>/dev/null || true
     wait "${pids[@]}" 2>/dev/null || true
-    rm -rf "$profiles"
+    # Chrome's helper processes can still be writing to the profiles for a moment.
+    for _ in 1 2 3 4 5; do
+        rm -rf "$profiles" 2>/dev/null && return
+        sleep 0.5
+    done
+    echo "warning: could not remove $profiles" >&2
 }
 trap cleanup EXIT
 

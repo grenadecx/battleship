@@ -91,6 +91,7 @@ async fn main() {
     load_font();
     let mut audio = Audio::load().await;
     let mut app = App::new();
+    let mut fps = FpsMeter::default();
     loop {
         let camera = letterbox_camera();
         set_camera(&camera);
@@ -112,11 +113,13 @@ async fn main() {
             18.0,
             MUTED,
         );
-        let fps = text(&format!("{} FPS", get_fps()), 16.0, VH - 14.0, 18.0, MUTED);
+        if let Some(rate) = fps.tick(get_time()) {
+            text(&format!("{rate} FPS"), 16.0, VH - 14.0, 18.0, MUTED);
+        }
         if let Some(latency) = app.latency() {
             text(
                 &format!("Ping {} ms", latency.as_millis()),
-                16.0 + fps.width + 20.0,
+                16.0 + measure("0000 FPS", 18.0).width + 20.0,
                 VH - 14.0,
                 18.0,
                 MUTED,
@@ -130,6 +133,29 @@ async fn main() {
             break;
         }
         next_frame().await;
+    }
+}
+
+/// Frame rate averaged over half a second, so the readout is steady enough to read.
+#[derive(Default)]
+struct FpsMeter {
+    frames: u32,
+    since: f64,
+    shown: Option<u32>,
+}
+
+impl FpsMeter {
+    const WINDOW_SECONDS: f64 = 0.5;
+
+    fn tick(&mut self, now: f64) -> Option<u32> {
+        self.frames += 1;
+        let elapsed = now - self.since;
+        if elapsed >= Self::WINDOW_SECONDS {
+            self.shown = Some((self.frames as f64 / elapsed).round() as u32);
+            self.frames = 0;
+            self.since = now;
+        }
+        self.shown
     }
 }
 

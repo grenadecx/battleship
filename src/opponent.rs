@@ -7,6 +7,7 @@ use crate::protocol::Message;
 use crate::rng::Rng;
 use crate::session::{Phase, Session};
 use std::collections::VecDeque;
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpponentEvent {
@@ -18,6 +19,10 @@ pub trait Opponent {
     fn send(&mut self, message: Message);
     /// Next event from the opponent, if any. Never blocks.
     fn poll(&mut self) -> Option<OpponentEvent>;
+    /// Round-trip time to the opponent, once measured.
+    fn latency(&self) -> Option<Duration> {
+        None
+    }
 }
 
 /// The game itself as a player. It always lets the human open the first round.
@@ -70,7 +75,11 @@ impl ComputerOpponent {
                     .receive_result(result)
                     .map_err(|e| e.to_string())?;
             }
-            Message::Hello { .. } | Message::Reveal(_) | Message::Bye => {}
+            Message::Hello { .. }
+            | Message::Reveal(_)
+            | Message::Ping(_)
+            | Message::Pong(_)
+            | Message::Bye => {}
         }
         Ok(())
     }

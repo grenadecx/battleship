@@ -112,7 +112,16 @@ async fn main() {
             18.0,
             MUTED,
         );
-        text(&format!("{} FPS", get_fps()), 16.0, VH - 14.0, 18.0, MUTED);
+        let fps = text(&format!("{} FPS", get_fps()), 16.0, VH - 14.0, 18.0, MUTED);
+        if let Some(latency) = app.latency() {
+            text(
+                &format!("Ping {} ms", latency.as_millis()),
+                16.0 + fps.width + 20.0,
+                VH - 14.0,
+                18.0,
+                MUTED,
+            );
+        }
 
         if ui.clicked_button {
             audio.play(Effect::Click);
@@ -361,6 +370,14 @@ impl App {
             self.screen,
             Screen::HostSetup { .. } | Screen::JoinSetup { .. }
         )
+    }
+
+    /// Round-trip time to a network opponent, while in a match.
+    fn latency(&self) -> Option<std::time::Duration> {
+        match &self.screen {
+            Screen::Match(game) => game.opponent.latency(),
+            _ => None,
+        }
     }
 
     fn frame(&mut self, ui: &mut Ui, audio: &Audio) {
@@ -800,7 +817,7 @@ impl Match {
                 self.check_game_over(now);
             }
             Message::Reveal(fleet) => self.enemy_fleet = fleet,
-            Message::Hello { .. } | Message::Bye => {}
+            Message::Hello { .. } | Message::Ping(_) | Message::Pong(_) | Message::Bye => {}
         }
     }
 

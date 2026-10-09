@@ -25,7 +25,8 @@ fn start_game(seed: u64) -> (Session, ComputerOpponent) {
 }
 
 /// Plays a whole game, the human aiming like the computer does.
-/// Returns every message the computer sent once the game was over.
+/// Returns every message the computer sent once the game was over, before
+/// the human says anything more.
 fn play_out(human: &mut Session, computer: &mut ComputerOpponent, seed: u64) -> Vec<Message> {
     let mut aim = Rng::new(seed + 2);
     while !human.is_over() {
@@ -43,7 +44,11 @@ fn play_out(human: &mut Session, computer: &mut ComputerOpponent, seed: u64) -> 
             other => panic!("unexpected {other:?} in {:?}", human.phase()),
         }
     }
-    computer.send(Message::Reveal(human.my_board().placements()));
+    drain(computer)
+}
+
+/// Every message the computer has queued up.
+fn drain(computer: &mut ComputerOpponent) -> Vec<Message> {
     std::iter::from_fn(|| computer.poll())
         .map(|event| match event {
             OpponentEvent::Message(message) => message,
@@ -180,4 +185,11 @@ fn computer_gives_up_on_a_shot_out_of_turn() {
 fn computer_has_no_latency() {
     let (_, computer) = start_game(7);
     assert_eq!(computer.latency(), None);
+}
+
+#[test]
+fn computer_reveals_its_fleet_only_once() {
+    let (human, mut computer, _) = finished_game(COMPUTER_WINS_SEED, Phase::Lost);
+    computer.send(Message::Reveal(human.my_board().placements()));
+    assert_eq!(drain(&mut computer), vec![]);
 }

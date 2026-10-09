@@ -65,3 +65,31 @@ fn missile_starts_and_ends_on_its_path_and_arcs_upwards() {
         "screen y grows downwards, so up is smaller"
     );
 }
+
+#[test]
+fn cell_center_is_half_a_cell_in_from_its_origin() {
+    assert_eq!(
+        cell_center(LEFT_BOARD, Coord::new(2, 3)),
+        vec2(205.0, 298.0)
+    );
+}
+
+#[test]
+fn our_missiles_launch_below_the_middle_of_our_board() {
+    let (from, _) = missile_path(Shot::Outgoing(Coord::new(0, 0)));
+    assert_eq!(from, vec2(300.0, 585.0));
+}
+
+#[test]
+fn their_missiles_drop_in_above_the_middle_of_their_board() {
+    let (from, _) = missile_path(Shot::Incoming(Coord::new(0, 0)));
+    assert_eq!(from, vec2(900.0, 45.0));
+}
+
+#[test]
+fn missile_peaks_at_35_percent_of_the_flight_distance() {
+    let from = vec2(0.0, 0.0);
+    let to = vec2(100.0, 0.0);
+    let peak = missile_position(from, to, 0.5);
+    assert!(peak.distance(vec2(50.0, -35.0)) < 1e-3, "{peak:?}");
+}

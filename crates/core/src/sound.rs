@@ -96,10 +96,14 @@ fn tone(seconds: f32, frequency: impl Fn(f32) -> f32, envelope: impl Fn(f32) -> 
         .map(|i| {
             let t = i as f32 / SAMPLE_RATE as f32;
             phase += std::f32::consts::TAU * frequency(t).max(20.0) / SAMPLE_RATE as f32;
-            let wave = phase.sin() * 0.8 + (phase * 2.0).sin() * 0.2;
-            wave * envelope(t)
+            waveform(phase) * envelope(t)
         })
         .collect()
+}
+
+/// The fundamental with a quieter overtone an octave up.
+fn waveform(phase: f32) -> f32 {
+    phase.sin() * 0.8 + (phase * 2.0).sin() * 0.2
 }
 
 /// Low-passed white noise; `brightness` in `0..1` is the filter coefficient.
@@ -129,7 +133,7 @@ fn melody(notes: &[(f32, f32)]) -> Vec<f32> {
             tone(
                 seconds,
                 move |_| frequency,
-                move |t| (t * 200.0).min(1.0) * (1.0 - t / seconds).max(0.0).powf(0.6) * 0.6,
+                move |t| (t * 200.0).min(1.0) * (1.0 - t / seconds).max(0.0).powf(0.6),
             )
         })
         .collect()

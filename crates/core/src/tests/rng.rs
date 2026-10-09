@@ -57,3 +57,24 @@ fn clock_seeded_generators_differ() {
     let draws = |rng: &mut Rng| (0..4).map(|_| rng.next_u64()).collect::<Vec<_>>();
     assert_ne!(draws(&mut a), draws(&mut b));
 }
+
+#[test]
+fn matches_the_splitmix64_reference_sequence() {
+    let mut rng = Rng::new(0);
+    assert_eq!(
+        [rng.next_u64(), rng.next_u64(), rng.next_u64()],
+        [
+            0xE220_A839_7B1D_CDAF,
+            0x6E78_9E6A_A1B9_65F4,
+            0x06C4_5D18_8009_454F
+        ]
+    );
+}
+
+#[test]
+fn next_f32_spreads_across_the_unit_interval() {
+    let mut rng = Rng::new(9);
+    let draws: Vec<f32> = (0..DRAWS).map(|_| rng.next_f32()).collect();
+    assert!(draws.iter().any(|v| *v < 0.1));
+    assert!(draws.iter().any(|v| *v > 0.9));
+}

@@ -1,0 +1,31 @@
+# Mutation testing with cargo-mutants (https://mutants.rs/): run `cargo mutants`.
+# Every mutant that compiles should be caught by a test. The exclusions below
+# are the ones no test can catch; each says why.
+
+# The rendering shell (main.rs and the online screens) has no tests; the
+# libraries hold the logic. web_socket.rs only compiles for the browser, so
+# native test runs cannot see mutants in it.
+exclude_globs = [
+    "crates/game/src/main.rs",
+    "crates/game/src/online_*.rs",
+    "crates/game/src/web_socket.rs",
+    "crates/game/build.rs",
+    "crates/server/src/main.rs",
+]
+
+exclude_re = [
+    # Equivalent: both directions along a line are searched, so walking each
+    # one backwards finds the same squares.
+    'ai\.rs:.*replace \+ with - in (finishing_shots|line_ends)$',
+    # Equivalent: running the phase backwards only flips the wave upside down.
+    'sound\.rs:.*replace \+= with -= in tone$',
+    # Equivalent: only differs when the elapsed time is exactly one interval.
+    'net\.rs:.*replace < with <= in NetLink::ping_if_due$',
+    # Depends on the machine's network routes and the clock respectively.
+    'net\.rs:.*local_ip_addresses',
+    'rng\.rs:.*Rng::from_time',
+    # The synthesis recipes and the tone's overtone mix: their constants decide
+    # how an effect sounds, which only a listener can judge. The building blocks
+    # they use are tested.
+    'sound\.rs:.* in (samples|explosion|waveform)$',
+]

@@ -165,5 +165,147 @@ fn audio_backend_decodes_every_sample() {
 fn finishing_silence_keeps_it_silent() {
     let mut samples = vec![0.0; 1000];
     finish(&mut samples);
-    assert_eq!(peak(&samples), 0.0);
+    assert!(samples.iter().all(|v| *v == 0.0), "{:?}", &samples[..4]);
+}
+
+const HALF_SECOND: usize = SAMPLE_RATE as usize / 2;
+
+fn constant(level: f32) -> impl Fn(f32) -> f32 {
+    move |_| level
+}
+
+/// The overtone never cancels the fundamental, so a tone crosses zero twice per cycle.
+fn zero_crossings(samples: &[f32]) -> usize {
+    samples
+        .windows(2)
+        .filter(|pair| (pair[0] < 0.0) != (pair[1] < 0.0))
+        .count()
+}
+
+fn assert_about(actual: usize, expected: usize, tolerance: usize) {
+    assert!(
+        actual.abs_diff(expected) <= tolerance,
+        "{actual} is not within {tolerance} of {expected}"
+    );
+}
+
+#[test]
+fn mix_adds_the_signals_and_pads_the_shorter_one() {
+    assert_eq!(mix(&[0.25, 0.5], &[0.125]), vec![0.375, 0.5]);
+}
+
+#[test]
+fn tone_lasts_the_requested_time() {
+    assert_eq!(tone(0.5, constant(440.0), constant(1.0)).len(), HALF_SECOND);
+}
+
+#[test]
+fn tone_has_the_requested_pitch() {
+    let a440 = tone(1.0, constant(440.0), constant(1.0));
+    assert_about(zero_crossings(&a440), 880, 2);
+}
+
+#[test]
+fn tone_never_drops_below_20_hz() {
+    let rumble = tone(1.0, constant(0.0), constant(1.0));
+    assert_about(zero_crossings(&rumble), 40, 2);
+}
+
+#[test]
+fn tone_is_shaped_by_its_envelope() {
+    let full = tone(0.1, constant(440.0), constant(1.0));
+    let half = tone(0.1, constant(440.0), constant(0.5));
+    assert!(
+        full.iter()
+            .zip(&half)
+            .all(|(f, h)| (f * 0.5 - h).abs() < 1e-6)
+    );
+}
+
+#[test]
+fn noise_lasts_the_requested_time() {
+    let hiss = noise(&mut Rng::new(1), 0.5, 0.5, constant(1.0));
+    assert_eq!(hiss.len(), HALF_SECOND);
+}
+
+#[test]
+fn noise_is_centred_on_silence() {
+    let hiss = noise(&mut Rng::new(1), 1.0, 0.5, constant(1.0));
+    let mean = hiss.iter().sum::<f32>() / hiss.len() as f32;
+    assert!(mean.abs() < 0.05, "mean {mean}");
+}
+
+#[test]
+fn unfiltered_noise_spans_three_times_full_scale() {
+    let hiss = noise(&mut Rng::new(1), 0.5, 1.0, constant(1.0));
+    let loudest = peak(&hiss);
+    assert!((2.9..=3.0).contains(&loudest), "peak {loudest}");
+}
+
+#[test]
+fn noise_without_brightness_is_silent() {
+    let hiss = noise(&mut Rng::new(1), 0.1, 0.0, constant(1.0));
+    assert!(hiss.iter().all(|v| *v == 0.0));
+}
+
+#[test]
+fn melody_plays_its_notes_back_to_back() {
+    let tune = melody(&[(440.0, 0.5), (880.0, 0.5)]);
+    assert_eq!(tune.len(), 2 * HALF_SECOND);
+}
+
+#[test]
+fn each_note_of_a_melody_has_its_own_pitch() {
+    let tune = melody(&[(440.0, 0.5), (880.0, 0.5)]);
+    assert_about(zero_crossings(&tune[..HALF_SECOND]), 440, 2);
+    assert_about(zero_crossings(&tune[HALF_SECOND..]), 880, 2);
+}
+
+#[test]
+fn each_note_of_a_melody_starts_from_silence() {
+    let tune = melody(&[(440.0, 0.5), (880.0, 0.5)]);
+    assert_eq!([tune[0], tune[HALF_SECOND]], [0.0, 0.0]);
+}
+
+#[test]
+fn each_note_of_a_melody_fades_out_by_its_end() {
+    let tune = melody(&[(440.0, 0.5), (880.0, 0.5)]);
+    let note_ends = [tune[HALF_SECOND - 1], tune[2 * HALF_SECOND - 1]];
+    assert!(note_ends.iter().all(|v| v.abs() < 0.01), "{note_ends:?}");
+}
+
+#[test]
+fn melody_notes_reach_their_full_volume() {
+    let tune = melody(&[(440.0, 0.5)]);
+    assert!(peak(&tune) > 0.5, "peak {}", peak(&tune));
+}
+
+#[test]
+fn finishing_normalises_the_peak_to_085() {
+    let mut samples = vec![0.5; HALF_SECOND];
+    finish(&mut samples);
+    assert_eq!(samples[0], 0.85);
+}
+
+#[test]
+fn finishing_fades_out_to_silence() {
+    let mut samples = vec![0.5; HALF_SECOND];
+    finish(&mut samples);
+    assert_eq!(*samples.last().unwrap(), 0.0);
+}
+
+#[test]
+fn finishing_fades_out_steadily() {
+    let mut samples = vec![0.5; HALF_SECOND];
+    finish(&mut samples);
+    assert!(samples.windows(2).all(|pair| pair[1] <= pair[0]));
+}
+
+#[test]
+fn noise_is_shaped_by_its_envelope_over_time() {
+    let first_half_only = |t: f32| if t < 0.25 { 1.0 } else { 0.0 };
+    let hiss = noise(&mut Rng::new(1), 0.5, 1.0, first_half_only);
+    let (first, second) = hiss.split_at(HALF_SECOND / 2);
+    assert!(first.iter().all(|v| *v != 0.0));
+    assert!(second.iter().all(|v| *v == 0.0));
 }

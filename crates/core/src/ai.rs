@@ -46,25 +46,20 @@ fn finishing_shots(grid: &TargetGrid) -> Vec<Coord> {
 
 /// The open squares just beyond both ends of the run of hits through `start`.
 fn line_ends(grid: &TargetGrid, start: Coord, dx: i32, dy: i32) -> Vec<Coord> {
-    let mut ends = Vec::new();
-    for direction in [1, -1] {
-        let mut step = 1;
-        loop {
-            let at = Coord::try_new(
-                start.x as i32 + dx * direction * step,
-                start.y as i32 + dy * direction * step,
-            );
-            match at.map(|c| (c, grid.get(c))) {
-                Some((_, Knowledge::Hit)) => step += 1,
-                Some((c, Knowledge::Unknown)) => {
-                    ends.push(c);
-                    break;
+    [(dx, dy), (-dx, -dy)]
+        .into_iter()
+        .filter_map(|(sx, sy)| {
+            let mut at = start;
+            loop {
+                at = Coord::try_new(at.x as i32 + sx, at.y as i32 + sy)?;
+                match grid.get(at) {
+                    Knowledge::Hit => continue,
+                    Knowledge::Unknown => return Some(at),
+                    _ => return None,
                 }
-                _ => break,
             }
-        }
-    }
-    ends
+        })
+        .collect()
 }
 
 /// The squares covered by the most legal positions of the ships still afloat.

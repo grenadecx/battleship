@@ -203,16 +203,13 @@ async fn relay<S>(stream: &mut S, peer: &Peer)
 where
     S: Stream<Item = Result<Message, axum::Error>> + Unpin,
 {
+    // A close frame ends the stream. Other frames are skipped: axum answers pings
+    // itself, and the game never sends binary frames.
     while let Some(Ok(frame)) = stream.next().await {
-        match frame {
-            Message::Text(text) => {
-                if peer.send(Out::Text(text.to_string())).is_err() {
-                    return;
-                }
-            }
-            Message::Close(_) => return,
-            // Pings are answered by axum; the game never sends binary frames.
-            _ => {}
+        if let Message::Text(text) = frame
+            && peer.send(Out::Text(text.to_string())).is_err()
+        {
+            return;
         }
     }
 }

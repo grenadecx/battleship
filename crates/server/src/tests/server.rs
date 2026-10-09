@@ -118,6 +118,7 @@ fn opening_a_room_gives_it_a_code() {
     let (code, _) = rooms.open(peer().0).unwrap();
     assert_eq!(code.len(), CODE_LENGTH);
     assert_eq!(rooms.len(), 1);
+    assert!(!rooms.is_empty());
 }
 
 #[test]

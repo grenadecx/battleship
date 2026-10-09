@@ -265,12 +265,15 @@ fn pings_on_the_first_poll() {
 #[test]
 fn pings_again_once_the_interval_has_passed() {
     let (mut link, w) = ready(true);
+    // A clock that doesn't start at zero, as the browser's doesn't.
+    w.borrow_mut().now = 10.0;
     link.poll();
-    w.borrow_mut().now = 0.5;
+    w.borrow_mut().now = 10.5;
     link.poll();
-    w.borrow_mut().now = 1.0;
+    assert_eq!(take_sent(&w), vec!["PING 0"]);
+    w.borrow_mut().now = 11.0;
     link.poll();
-    assert_eq!(take_sent(&w), vec!["PING 0", "PING 1"]);
+    assert_eq!(take_sent(&w), vec!["PING 1"]);
 }
 
 #[test]
@@ -293,8 +296,9 @@ fn latency_is_unknown_until_a_pong_arrives() {
 #[test]
 fn a_pong_measures_the_round_trip() {
     let (mut link, w) = ready(true);
+    w.borrow_mut().now = 10.0;
     link.poll();
-    w.borrow_mut().now = 0.25;
+    w.borrow_mut().now = 10.25;
     say(&w, "PONG 0");
     assert_eq!(link.poll(), None);
     assert_eq!(link.latency(), Some(Duration::from_millis(250)));

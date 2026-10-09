@@ -109,3 +109,22 @@ fn a_blocked_line_of_hits_falls_back_to_the_squares_around_it() {
     ]);
     assert_targets_only(&grid, &[c(0, 1), c(1, 1)]);
 }
+
+#[test]
+fn extends_a_line_of_hits_at_both_ends() {
+    let grid = grid_with(&[(c(4, 5), ShotResult::Hit), (c(5, 5), ShotResult::Hit)]);
+    let targets: std::collections::HashSet<Coord> = (0..SEEDS)
+        .map(|seed| choose_target(&grid, &mut Rng::new(seed)))
+        .collect();
+    assert_eq!(targets, [c(3, 5), c(6, 5)].into());
+}
+
+#[test]
+fn follows_a_vertical_line_back_past_a_blocked_far_end() {
+    let grid = grid_with(&[
+        (c(2, 3), ShotResult::Miss),
+        (c(2, 1), ShotResult::Hit),
+        (c(2, 2), ShotResult::Hit),
+    ]);
+    assert_targets_only(&grid, &[c(2, 0)]);
+}

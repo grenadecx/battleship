@@ -9,7 +9,6 @@ use battleship::layout::{
     BOARD_PX, CELL, LEFT_BOARD, RIGHT_BOARD, board_cell_at, cell_center, cell_origin, missile_path,
     missile_position,
 };
-use battleship::net::{self, DEFAULT_PORT, Host, Joining};
 use battleship::opponent::{ComputerOpponent, Opponent};
 use battleship::rng::Rng;
 use battleship::session::Phase;
@@ -18,6 +17,14 @@ use macroquad::audio::{PlaySoundParams, Sound, load_sound_from_bytes, play_sound
 use macroquad::prelude::*;
 use std::cell::Cell;
 use std::collections::HashMap;
+
+/// Online play: direct TCP between desktop games, rooms on the relay server in
+/// the browser.
+#[cfg_attr(not(target_arch = "wasm32"), path = "online_lan.rs")]
+#[cfg_attr(target_arch = "wasm32", path = "online_web.rs")]
+mod online;
+
+use online::Online;
 
 static FONT_BYTES: &[u8] = include_bytes!("../assets/DejaVuSans-Bold.ttf");
 
@@ -332,22 +339,7 @@ impl Audio {
 
 enum Screen {
     Menu,
-    HostSetup {
-        port: TextInput,
-        error: Option<String>,
-    },
-    Hosting {
-        host: Host,
-        addresses: Vec<String>,
-    },
-    JoinSetup {
-        address: TextInput,
-        error: Option<String>,
-    },
-    Joining {
-        joining: Joining,
-        address: String,
-    },
+    Online(Online),
     Match(Box<Match>),
 }
 
@@ -367,10 +359,7 @@ impl App {
     }
 
     fn is_typing(&self) -> bool {
-        matches!(
-            self.screen,
-            Screen::HostSetup { .. } | Screen::JoinSetup { .. }
-        )
+        matches!(&self.screen, Screen::Online(online) if online.is_typing())
     }
 
     /// Round-trip time to a network opponent, while in a match.
@@ -384,16 +373,7 @@ impl App {
     fn frame(&mut self, ui: &mut Ui, audio: &Audio) {
         let next = match &mut self.screen {
             Screen::Menu => self.menu(ui),
-            Screen::HostSetup { port, error } => host_setup(ui, port, error),
-            Screen::Hosting { host, addresses } => hosting(ui, host, addresses),
-            Screen::JoinSetup { address, error } => {
-                let next = join_setup(ui, address, error);
-                if next.is_some() {
-                    self.last_join_address = address.text.clone();
-                }
-                next
-            }
-            Screen::Joining { joining, address } => joining_screen(ui, joining, address),
+            Screen::Online(online) => online.frame(ui, &mut self.last_join_address),
             Screen::Match(game) => game.frame(ui, audio),
         };
         if let Some(next) = next {
@@ -425,25 +405,22 @@ impl App {
         let mut next = None;
         if ui.button(Rect::new(x, 360.0, 340.0, 58.0), "Play vs Computer", true) {
             next = Some(Screen::Match(Box::new(Match::new(
-                Box::new(ComputerOpponent::new(Rng::from_time())),
+                Box::new(ComputerOpponent::new(fresh_rng())),
                 "Computer".into(),
                 true,
                 true,
             ))));
         }
         if ui.button(Rect::new(x, 432.0, 340.0, 58.0), "Host Online Game", true) {
-            next = Some(Screen::HostSetup {
-                port: TextInput::new(&DEFAULT_PORT.to_string(), 5),
-                error: None,
-            });
+            next = Some(Screen::Online(Online::host()));
         }
         if ui.button(Rect::new(x, 504.0, 340.0, 58.0), "Join Online Game", true) {
-            next = Some(Screen::JoinSetup {
-                address: TextInput::new(&self.last_join_address, 64),
-                error: None,
-            });
+            next = Some(Screen::Online(Online::join(&self.last_join_address)));
         }
-        if ui.button(Rect::new(x, 576.0, 340.0, 58.0), "Quit", true) {
+        // A browser tab is closed, not quit.
+        if cfg!(not(target_arch = "wasm32"))
+            && ui.button(Rect::new(x, 576.0, 340.0, 58.0), "Quit", true)
+        {
             self.quit = true;
         }
         draw_text_centered(
@@ -457,187 +434,24 @@ impl App {
     }
 }
 
+/// A generator seeded from the clock.
+#[cfg(not(target_arch = "wasm32"))]
+fn fresh_rng() -> Rng {
+    Rng::from_time()
+}
+
+/// Browsers have no system clock or process id to seed from, and the page clock
+/// only ticks in milliseconds, so it is mixed with a count of the seeds handed out.
+#[cfg(target_arch = "wasm32")]
+fn fresh_rng() -> Rng {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEEDS: AtomicU64 = AtomicU64::new(0);
+    let count = SEEDS.fetch_add(1, Ordering::Relaxed);
+    Rng::new(macroquad::miniquad::date::now().to_bits() ^ count.wrapping_mul(0x9E37_79B9_7F4A_7C15))
+}
+
 fn back_button(ui: &mut Ui) -> bool {
     ui.button(Rect::new(30.0, 24.0, 120.0, 44.0), "Back", true) || is_key_pressed(KeyCode::Escape)
-}
-
-fn host_setup(ui: &mut Ui, port: &mut TextInput, error: &mut Option<String>) -> Option<Screen> {
-    if back_button(ui) {
-        return Some(Screen::Menu);
-    }
-    draw_text_centered("HOST A GAME", VW / 2.0, 150.0, 60.0, ACCENT);
-    draw_text_centered(
-        "Choose the TCP port to listen on",
-        VW / 2.0,
-        250.0,
-        26.0,
-        INK,
-    );
-    port.update(ui);
-    port.text.retain(|c| c.is_ascii_digit());
-    let field = Rect::new(VW / 2.0 - 120.0, 280.0, 240.0, 60.0);
-    port.draw(field, ui.time);
-    if let Some(e) = error {
-        draw_text_centered(e, VW / 2.0, 380.0, 24.0, DANGER);
-    }
-    let start = ui.button(
-        Rect::new(VW / 2.0 - 140.0, 420.0, 280.0, 58.0),
-        "Start hosting",
-        true,
-    ) || is_key_pressed(KeyCode::Enter)
-        || is_key_pressed(KeyCode::KpEnter);
-    if start {
-        let Ok(number) = port.text.parse::<u16>() else {
-            *error = Some("Enter a port between 1 and 65535".into());
-            return None;
-        };
-        if number == 0 {
-            *error = Some("Enter a port between 1 and 65535".into());
-            return None;
-        }
-        match Host::start(number) {
-            Ok(host) => {
-                let mut addresses: Vec<String> = net::local_ip_addresses()
-                    .into_iter()
-                    .map(|ip| match ip {
-                        std::net::IpAddr::V4(v4) => format!("{v4}:{number}"),
-                        std::net::IpAddr::V6(v6) => format!("[{v6}]:{number}"),
-                    })
-                    .collect();
-                if addresses.is_empty() {
-                    addresses.push(format!("<this computer's IP>:{number}"));
-                }
-                return Some(Screen::Hosting { host, addresses });
-            }
-            Err(e) => *error = Some(format!("Could not listen on port {number}: {e}")),
-        }
-    }
-    None
-}
-
-fn hosting(ui: &mut Ui, host: &mut Host, addresses: &[String]) -> Option<Screen> {
-    if back_button(ui) {
-        return Some(Screen::Menu);
-    }
-    if let Some(link) = host.poll() {
-        let label = link.peer().ip().to_string();
-        return Some(Screen::Match(Box::new(Match::new(
-            Box::new(link),
-            label,
-            true,
-            false,
-        ))));
-    }
-    draw_text_centered("WAITING FOR AN OPPONENT", VW / 2.0, 150.0, 54.0, ACCENT);
-    draw_radar(VW / 2.0, 300.0, 90.0, ui.time as f32);
-    draw_text_centered(
-        &format!(
-            "Listening on TCP port {}. Ask your opponent to join one of:",
-            host.port()
-        ),
-        VW / 2.0,
-        440.0,
-        26.0,
-        INK,
-    );
-    let mut y = 490.0;
-    for address in addresses.iter().take(3) {
-        draw_text_centered(address, VW / 2.0 - 70.0, y, 34.0, GOOD);
-        if ui.button(
-            Rect::new(VW / 2.0 + 150.0, y - 30.0, 120.0, 40.0),
-            "Copy",
-            true,
-        ) {
-            macroquad::miniquad::window::clipboard_set(address);
-        }
-        y += 52.0;
-    }
-    draw_text_centered(
-        "Same network: use the address above. Over the internet: forward this TCP port on your",
-        VW / 2.0,
-        y + 30.0,
-        20.0,
-        MUTED,
-    );
-    draw_text_centered(
-        "router to this computer and share your public IP. Allow the game through your firewall.",
-        VW / 2.0,
-        y + 54.0,
-        20.0,
-        MUTED,
-    );
-    None
-}
-
-fn join_setup(ui: &mut Ui, address: &mut TextInput, error: &mut Option<String>) -> Option<Screen> {
-    if back_button(ui) {
-        return Some(Screen::Menu);
-    }
-    draw_text_centered("JOIN A GAME", VW / 2.0, 150.0, 60.0, ACCENT);
-    draw_text_centered(
-        &format!("Host address as IP or IP:port (default port {DEFAULT_PORT}). Ctrl+V pastes."),
-        VW / 2.0,
-        250.0,
-        26.0,
-        INK,
-    );
-    address.update(ui);
-    address.draw(Rect::new(VW / 2.0 - 260.0, 280.0, 520.0, 60.0), ui.time);
-    if let Some(e) = error {
-        draw_text_centered(e, VW / 2.0, 380.0, 24.0, DANGER);
-    }
-    let go = ui.button(
-        Rect::new(VW / 2.0 - 140.0, 420.0, 280.0, 58.0),
-        "Connect",
-        true,
-    ) || is_key_pressed(KeyCode::Enter)
-        || is_key_pressed(KeyCode::KpEnter);
-    if go {
-        match net::parse_address(&address.text) {
-            Ok(normalised) => {
-                return Some(Screen::Joining {
-                    joining: net::join(&normalised),
-                    address: normalised,
-                });
-            }
-            Err(e) => *error = Some(e),
-        }
-    }
-    None
-}
-
-fn joining_screen(ui: &mut Ui, joining: &mut Joining, address: &str) -> Option<Screen> {
-    if back_button(ui) {
-        return Some(Screen::Menu);
-    }
-    match joining.poll() {
-        Some(Ok(link)) => {
-            let label = link.peer().ip().to_string();
-            return Some(Screen::Match(Box::new(Match::new(
-                Box::new(link),
-                label,
-                false,
-                false,
-            ))));
-        }
-        Some(Err(e)) => {
-            return Some(Screen::JoinSetup {
-                address: TextInput::new(address, 64),
-                error: Some(e),
-            });
-        }
-        None => {}
-    }
-    draw_text_centered("CONNECTING", VW / 2.0, 150.0, 60.0, ACCENT);
-    draw_radar(VW / 2.0, 330.0, 90.0, ui.time as f32);
-    draw_text_centered(
-        &format!("Calling {address} ..."),
-        VW / 2.0,
-        480.0,
-        30.0,
-        INK,
-    );
-    None
 }
 
 // ---------------------------------------------------------------------------
@@ -658,7 +472,7 @@ impl Match {
         i_go_first: bool,
         vs_computer: bool,
     ) -> Self {
-        let mut rng = Rng::from_time();
+        let mut rng = fresh_rng();
         let game_rng = Rng::new(rng.next_u64());
         Match {
             game: Game::new(opponent, i_go_first, vs_computer, game_rng),

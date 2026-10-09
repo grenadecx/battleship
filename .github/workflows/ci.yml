@@ -19,13 +19,13 @@ jobs:
       - name: Install system libraries
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libx11-dev libxi-dev libgl1-mesa-dev
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
       - name: Coverage report
-        # Measure the library only: main.rs is the rendering shell, and src/tests/
-        # holds the unit tests themselves.
+        # Measure the libraries only: main.rs and the online_*.rs screens are the
+        # rendering shell, and src/tests/ holds the unit tests themselves.
         env:
-          IGNORE: --ignore-filename-regex src/(main\.rs|tests/)
+          IGNORE: --ignore-filename-regex src/(main\.rs|online_[a-z]+\.rs|tests/)
         run: |
           cargo llvm-cov --no-report
           cargo llvm-cov report --html $IGNORE
@@ -39,3 +39,48 @@ jobs:
         with:
           name: coverage-report
           path: target/llvm-cov/html
+
+  web:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.99
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm
+      - run: cargo clippy -p battleship --target wasm32-unknown-unknown -- -D warnings
+      - run: scripts/build-web.sh target/web
+      - uses: actions/upload-artifact@v7
+        with:
+          name: web
+          path: target/web
+
+  docker:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build -t battleship .
+      - name: Start the container
+        run: |
+          docker run -d --name battleship -p 8080:8080 battleship
+          for _ in $(seq 30); do
+            curl -fs http://localhost:8080/healthz && exit 0
+            sleep 1
+          done
+          docker logs battleship
+          exit 1
+      # Two headless Chromes play the opening of an online game through it.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: scripts/web-e2e.sh http://localhost:8080 target/web-e2e
+      - if: failure()
+        run: docker logs battleship
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: web-e2e-screenshots
+          path: target/web-e2e

@@ -1,0 +1,10 @@
+[package]
+name = "battleship"
+version.workspace = true
+edition.workspace = true
+description = "Battleship with a computer opponent, P2P TCP multiplayer on the desktop and online play in the browser"
+build = "build.rs"
+
+[dependencies]
+battleship-core.workspace = true
+macroquad = { version = "0.4", features = ["audio"] }

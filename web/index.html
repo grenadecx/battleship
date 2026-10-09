@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Battleship</title>
+    <style>
+        html, body {
+            margin: 0;
+            height: 100%;
+            overflow: hidden;
+            background: #051526;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            outline: none;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="glcanvas" tabindex="1"></canvas>
+    <script>
+        // The bundle runs in strict mode, and its quad_net plugin (which this game
+        // doesn't use) assigns this global without declaring it.
+        var register_plugin;
+    </script>
+    <!-- macroquad's loader, copied from the exact macroquad version in Cargo.lock
+         by scripts/build-web.sh. -->
+    <script src="mq_js_bundle.js"></script>
+    <script src="battleship_ws.js"></script>
+    <script>
+        load("battleship.wasm");
+        document.getElementById("glcanvas").focus();
+    </script>
+</body>
+</html>

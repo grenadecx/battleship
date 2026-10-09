@@ -11,7 +11,9 @@ impl Rng {
         Rng { state: seed }
     }
 
-    /// Seeds from the system clock.
+    /// Seeds from the system clock. Browsers have neither, so the web build
+    /// seeds from the page's clock instead.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn from_time() -> Self {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

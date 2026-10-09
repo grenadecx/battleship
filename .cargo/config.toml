@@ -1,0 +1,6 @@
+# The browser build imports its platform functions (WebGL, audio, WebSocket) from
+# the JavaScript in web/. Rust 1.89 and later refuse to link wasm imports that
+# don't name their module, which macroquad's audio backend still doesn't do, so
+# let the page supply them, as older Rust did by default.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=--allow-undefined"]

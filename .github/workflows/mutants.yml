@@ -21,14 +21,16 @@ jobs:
           tool: cargo-mutants
       - name: Install system libraries
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libx11-dev libxi-dev libgl1-mesa-dev
+      # Exit code 3 means the only survivors made the tests hang until the
+      # timeout, which still counts as detected. Missed mutants exit with 2.
       - name: Mutate the lines this PR changes
         if: github.event_name == 'pull_request'
         run: |
           git diff origin/${{ github.base_ref }}... > pr.diff
-          cargo mutants --no-shuffle --in-diff pr.diff
+          cargo mutants --no-shuffle --in-diff pr.diff || [ $? -eq 3 ]
       - name: Mutate everything
         if: github.event_name != 'pull_request'
-        run: cargo mutants --no-shuffle
+        run: cargo mutants --no-shuffle || [ $? -eq 3 ]
       - uses: actions/upload-artifact@v7
         if: always()
         with:

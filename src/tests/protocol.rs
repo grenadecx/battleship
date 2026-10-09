@@ -17,6 +17,8 @@ fn encodes_the_simple_messages() {
         (Message::Fire(c(3, 7)), "FIRE 3 7"),
         (Message::Result(ShotResult::Miss), "RESULT MISS"),
         (Message::Result(ShotResult::Hit), "RESULT HIT"),
+        (Message::Ping(42), "PING 42"),
+        (Message::Pong(42), "PONG 42"),
         (Message::Bye, "BYE"),
     ] {
         assert_eq!(message.encode(), line, "{message:?}");
@@ -49,6 +51,8 @@ fn every_message_round_trips() {
         Board::random(&mut Rng::new(4)).placements(),
     ));
     round_trip(Message::Reveal(vec![]));
+    round_trip(Message::Ping(u32::MAX));
+    round_trip(Message::Pong(0));
     round_trip(Message::Bye);
 }
 
@@ -89,6 +93,9 @@ fn rejects_garbage() {
         "RESULT SUNK Destroyer 1;1 2,1",
         "REVEAL Carrier,0,0,X",
         "REVEAL Carrier,0,0",
+        "PING",
+        "PING -1",
+        "PONG x",
     ] {
         assert!(Message::decode(line).is_err(), "accepted {line:?}");
     }

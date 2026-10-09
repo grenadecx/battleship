@@ -15,44 +15,43 @@ use battleship::session::Phase;
 use battleship::sound::{self, Effect};
 use macroquad::audio::{PlaySoundParams, Sound, load_sound_from_bytes, play_sound};
 use macroquad::prelude::*;
-use std::cell::RefCell;
+use std::cell::Cell;
 use std::collections::HashMap;
 
 static FONT_BYTES: &[u8] = include_bytes!("../assets/DejaVuSans-Bold.ttf");
 
 thread_local! {
-    static FONT: RefCell<Option<Font>> = const { RefCell::new(None) };
+    /// Leaked on purpose: dropping the font's texture during thread-local teardown,
+    /// after macroquad has destroyed the GL context, segfaults on exit.
+    static FONT: Cell<Option<&'static Font>> = const { Cell::new(None) };
 }
 
 fn load_font() {
     if let Ok(mut font) = load_ttf_font_from_bytes(FONT_BYTES) {
         font.set_filter(FilterMode::Linear);
-        FONT.with(|f| *f.borrow_mut() = Some(font));
+        FONT.set(Some(Box::leak(Box::new(font))));
     }
 }
 
 /// Draws text with the embedded font; `y` is the baseline.
 fn text(s: &str, x: f32, y: f32, size: f32, color: Color) -> TextDimensions {
     let font_size = (size * 0.8).round().max(1.0) as u16;
-    FONT.with(|f| {
-        let font = f.borrow();
-        draw_text_ex(
-            s,
-            x,
-            y,
-            TextParams {
-                font: font.as_ref(),
-                font_size,
-                color,
-                ..Default::default()
-            },
-        )
-    })
+    draw_text_ex(
+        s,
+        x,
+        y,
+        TextParams {
+            font: FONT.get(),
+            font_size,
+            color,
+            ..Default::default()
+        },
+    )
 }
 
 fn measure(s: &str, size: f32) -> TextDimensions {
     let font_size = (size * 0.8).round().max(1.0) as u16;
-    FONT.with(|f| measure_text(s, f.borrow().as_ref(), font_size, 1.0))
+    measure_text(s, FONT.get(), font_size, 1.0)
 }
 
 // ---------------------------------------------------------------------------
@@ -89,6 +88,7 @@ async fn main() {
     load_font();
     let mut audio = Audio::load().await;
     let mut app = App::new();
+    let mut fps = FpsMeter::default();
     loop {
         let camera = letterbox_camera();
         set_camera(&camera);
@@ -110,6 +110,18 @@ async fn main() {
             18.0,
             MUTED,
         );
+        if let Some(rate) = fps.tick(get_time()) {
+            text(&format!("{rate} FPS"), 16.0, VH - 14.0, 18.0, MUTED);
+        }
+        if let Some(latency) = app.latency() {
+            text(
+                &format!("Ping {} ms", latency.as_millis()),
+                16.0 + measure("0000 FPS", 18.0).width + 20.0,
+                VH - 14.0,
+                18.0,
+                MUTED,
+            );
+        }
 
         if ui.clicked_button {
             audio.play(Effect::Click);
@@ -118,6 +130,29 @@ async fn main() {
             break;
         }
         next_frame().await;
+    }
+}
+
+/// Frame rate averaged over half a second, so the readout is steady enough to read.
+#[derive(Default)]
+struct FpsMeter {
+    frames: u32,
+    since: f64,
+    shown: Option<u32>,
+}
+
+impl FpsMeter {
+    const WINDOW_SECONDS: f64 = 0.5;
+
+    fn tick(&mut self, now: f64) -> Option<u32> {
+        self.frames += 1;
+        let elapsed = now - self.since;
+        if elapsed >= Self::WINDOW_SECONDS {
+            self.shown = Some((self.frames as f64 / elapsed).round() as u32);
+            self.frames = 0;
+            self.since = now;
+        }
+        self.shown
     }
 }
 
@@ -358,6 +393,14 @@ impl App {
             self.screen,
             Screen::HostSetup { .. } | Screen::JoinSetup { .. }
         )
+    }
+
+    /// Round-trip time to a network opponent, while in a match.
+    fn latency(&self) -> Option<std::time::Duration> {
+        match &self.screen {
+            Screen::Match(game) => game.game.latency(),
+            _ => None,
+        }
     }
 
     fn frame(&mut self, ui: &mut Ui, audio: &Audio) {

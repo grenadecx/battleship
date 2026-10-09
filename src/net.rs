@@ -7,15 +7,16 @@ use crate::opponent::{Opponent, OpponentEvent};
 use crate::protocol::{Message, PROTOCOL_VERSION};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub const DEFAULT_PORT: u16 = 7777;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(8);
+const PING_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Normalises user input such as `192.168.1.20`, ` 10.0.0.5:9000 ` or `[::1]` to `host:port`.
 pub fn parse_address(input: &str) -> Result<String, String> {
@@ -126,17 +127,44 @@ fn handshake(stream: TcpStream) -> Result<NetLink, String> {
     }
     reader.get_ref().set_read_timeout(None).map_err(io_error)?;
 
+    let writer = Arc::new(Mutex::new(writer));
     let (events, receiver) = mpsc::channel();
-    thread::spawn(move || read_loop(reader, events));
+    let replies = Arc::clone(&writer);
+    thread::spawn(move || read_loop(reader, &replies, events));
     Ok(NetLink {
-        stream: writer,
+        writer,
         events: receiver,
         peer,
         closed: false,
+        ping: None,
+        latency: None,
     })
 }
 
-fn read_loop(mut reader: BufReader<TcpStream>, events: mpsc::Sender<OpponentEvent>) {
+/// What the reader thread hands to the game loop.
+enum Incoming {
+    Event(OpponentEvent),
+    /// A pong, stamped on arrival so the measurement does not include frame time.
+    Pong {
+        id: u32,
+        at: Instant,
+    },
+}
+
+fn write_message(writer: &Mutex<TcpStream>, message: &Message) -> io::Result<()> {
+    let line = format!("{}\n", message.encode());
+    let mut stream = writer
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    stream.write_all(line.as_bytes())
+}
+
+/// Answers pings on the spot; passes everything else on to the game loop.
+fn read_loop(
+    mut reader: BufReader<TcpStream>,
+    writer: &Mutex<TcpStream>,
+    events: mpsc::Sender<Incoming>,
+) {
     let mut line = String::new();
     loop {
         line.clear();
@@ -145,8 +173,25 @@ fn read_loop(mut reader: BufReader<TcpStream>, events: mpsc::Sender<OpponentEven
             Ok(_) if line.trim().is_empty() => continue,
             Ok(_) => match Message::decode(&line) {
                 Ok(Message::Bye) => "Your opponent left the game".to_string(),
+                Ok(Message::Ping(id)) => {
+                    let _ = write_message(writer, &Message::Pong(id));
+                    continue;
+                }
+                Ok(Message::Pong(id)) => {
+                    let pong = Incoming::Pong {
+                        id,
+                        at: Instant::now(),
+                    };
+                    if events.send(pong).is_err() {
+                        return;
+                    }
+                    continue;
+                }
                 Ok(message) => {
-                    if events.send(OpponentEvent::Message(message)).is_err() {
+                    if events
+                        .send(Incoming::Event(OpponentEvent::Message(message)))
+                        .is_err()
+                    {
                         return;
                     }
                     continue;
@@ -154,22 +199,43 @@ fn read_loop(mut reader: BufReader<TcpStream>, events: mpsc::Sender<OpponentEven
                 Err(error) => error.to_string(),
             },
         };
-        let _ = events.send(OpponentEvent::Disconnected(farewell));
+        let _ = events.send(Incoming::Event(OpponentEvent::Disconnected(farewell)));
         return;
     }
 }
 
 /// An established, handshaken connection to the other player.
 pub struct NetLink {
-    stream: TcpStream,
-    events: Receiver<OpponentEvent>,
+    writer: Arc<Mutex<TcpStream>>,
+    events: Receiver<Incoming>,
     peer: SocketAddr,
     closed: bool,
+    /// The last ping sent: its id and when it went out.
+    ping: Option<(u32, Instant)>,
+    latency: Option<Duration>,
 }
 
 impl NetLink {
     pub fn peer(&self) -> SocketAddr {
         self.peer
+    }
+
+    fn ping_if_due(&mut self) {
+        let id = match self.ping {
+            Some((_, sent)) if sent.elapsed() < PING_INTERVAL => return,
+            Some((id, _)) => id.wrapping_add(1),
+            None => 0,
+        };
+        self.send(Message::Ping(id));
+        self.ping = Some((id, Instant::now()));
+    }
+
+    fn shutdown(&self) {
+        let stream = self
+            .writer
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _ = stream.shutdown(std::net::Shutdown::Both);
     }
 }
 
@@ -178,9 +244,9 @@ impl Opponent for NetLink {
         if self.closed {
             return;
         }
-        if writeln!(self.stream, "{}", message.encode()).is_err() {
+        if write_message(&self.writer, &message).is_err() {
             // The reader thread notices the shutdown and reports the disconnect.
-            let _ = self.stream.shutdown(std::net::Shutdown::Both);
+            self.shutdown();
         }
     }
 
@@ -188,26 +254,41 @@ impl Opponent for NetLink {
         if self.closed {
             return None;
         }
-        let event = match self.events.try_recv() {
-            Ok(event) => event,
-            Err(TryRecvError::Empty) => return None,
-            Err(TryRecvError::Disconnected) => {
-                OpponentEvent::Disconnected("Lost the connection to your opponent".into())
+        self.ping_if_due();
+        loop {
+            let event = match self.events.try_recv() {
+                Ok(Incoming::Event(event)) => event,
+                Ok(Incoming::Pong { id, at }) => {
+                    if let Some((sent_id, sent)) = self.ping
+                        && sent_id == id
+                    {
+                        self.latency = Some(at.saturating_duration_since(sent));
+                    }
+                    continue;
+                }
+                Err(TryRecvError::Empty) => return None,
+                Err(TryRecvError::Disconnected) => {
+                    OpponentEvent::Disconnected("Lost the connection to your opponent".into())
+                }
+            };
+            if matches!(event, OpponentEvent::Disconnected(_)) {
+                self.closed = true;
             }
-        };
-        if matches!(event, OpponentEvent::Disconnected(_)) {
-            self.closed = true;
+            return Some(event);
         }
-        Some(event)
+    }
+
+    fn latency(&self) -> Option<Duration> {
+        self.latency
     }
 }
 
 impl Drop for NetLink {
     fn drop(&mut self) {
         if !self.closed {
-            let _ = writeln!(self.stream, "{}", Message::Bye.encode());
+            let _ = write_message(&self.writer, &Message::Bye);
         }
-        let _ = self.stream.shutdown(std::net::Shutdown::Both);
+        self.shutdown();
     }
 }
 

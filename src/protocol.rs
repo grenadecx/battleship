@@ -1,17 +1,18 @@
 //! Line based text protocol spoken between two peers (and the computer opponent).
 //!
 //! ```text
-//! HELLO BATTLESHIP 1
+//! HELLO BATTLESHIP 2
 //! READY
 //! FIRE 3 7
 //! RESULT MISS | RESULT HIT | RESULT SUNK Cruiser 3,7 4,7 5,7
 //! REVEAL Carrier,0,0,H Battleship,2,4,V ...
+//! PING 42 | PONG 42
 //! BYE
 //! ```
 
 use crate::domain::{Coord, Orientation, Placement, ShipKind, ShotResult};
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
@@ -24,6 +25,9 @@ pub enum Message {
     Result(ShotResult),
     /// The sender's fleet, shared once the game is over.
     Reveal(Vec<Placement>),
+    /// Asks the peer to echo the id back in a `Pong`, to measure latency.
+    Ping(u32),
+    Pong(u32),
     Bye,
 }
 
@@ -63,6 +67,8 @@ impl Message {
                 }
                 line
             }
+            Message::Ping(id) => format!("PING {id}"),
+            Message::Pong(id) => format!("PONG {id}"),
             Message::Bye => "BYE".to_string(),
         }
     }
@@ -75,6 +81,8 @@ impl Message {
             },
             ["READY"] => Message::Ready,
             ["BYE"] => Message::Bye,
+            ["PING", id] => Message::Ping(id.parse().map_err(|_| error(line))?),
+            ["PONG", id] => Message::Pong(id.parse().map_err(|_| error(line))?),
             ["FIRE", x, y] => Message::Fire(coord(x, y).ok_or_else(|| error(line))?),
             ["RESULT", "MISS"] => Message::Result(ShotResult::Miss),
             ["RESULT", "HIT"] => Message::Result(ShotResult::Hit),

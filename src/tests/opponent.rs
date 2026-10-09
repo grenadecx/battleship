@@ -175,3 +175,9 @@ fn computer_gives_up_on_a_shot_out_of_turn() {
     computer.send(Message::Fire(Coord::new(1, 0)));
     assert!(gave_up(&mut computer));
 }
+
+#[test]
+fn computer_has_no_latency() {
+    let (_, computer) = start_game(7);
+    assert_eq!(computer.latency(), None);
+}

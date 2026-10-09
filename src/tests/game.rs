@@ -8,6 +8,7 @@ use std::rc::Rc;
 struct Wire {
     sent: Vec<Message>,
     incoming: VecDeque<OpponentEvent>,
+    latency: Option<Duration>,
 }
 
 struct Scripted(Rc<RefCell<Wire>>);
@@ -19,6 +20,10 @@ impl Opponent for Scripted {
 
     fn poll(&mut self) -> Option<OpponentEvent> {
         self.0.borrow_mut().incoming.pop_front()
+    }
+
+    fn latency(&self) -> Option<Duration> {
+        self.0.borrow().latency
     }
 }
 
@@ -344,12 +349,16 @@ fn the_first_reason_to_stop_is_kept() {
 }
 
 #[test]
-fn hello_and_bye_are_ignored_mid_game() {
+fn handshake_ping_and_bye_messages_are_ignored_mid_game() {
     let (mut game, wire) = started(true);
     say(&wire, Message::Hello { version: 1 });
+    say(&wire, Message::Ping(1));
+    say(&wire, Message::Pong(1));
     say(&wire, Message::Bye);
-    game.update(0.0);
-    game.update(1.0);
+    for step in 0..4 {
+        game.update(step as f64);
+    }
+    assert!(wire.borrow().incoming.is_empty());
     assert_eq!(game.disconnected(), None);
     assert!(game.can_fire());
 }
@@ -492,4 +501,12 @@ fn sinking_the_whole_enemy_fleet_wins() {
         game.take_events()
             .contains(&GameEvent::Fanfare(Effect::Victory))
     );
+}
+
+#[test]
+fn latency_is_the_opponents() {
+    let (game, wire) = scripted(true);
+    assert_eq!(game.latency(), None);
+    wire.borrow_mut().latency = Some(Duration::from_millis(42));
+    assert_eq!(game.latency(), Some(Duration::from_millis(42)));
 }

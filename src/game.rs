@@ -11,6 +11,7 @@ use crate::session::{Phase, Session};
 use crate::setup::FleetEditor;
 use crate::sound::Effect;
 use std::collections::VecDeque;
+use std::time::Duration;
 
 /// Time a missile is in the air, in seconds.
 pub const MISSILE_SECONDS: f64 = 0.65;
@@ -156,6 +157,11 @@ impl Game {
         (100 * self.hits).checked_div(self.shots).unwrap_or(0)
     }
 
+    /// Round-trip time to a network opponent, once measured.
+    pub fn latency(&self) -> Option<Duration> {
+        self.opponent.latency()
+    }
+
     pub fn wins(&self) -> u32 {
         self.wins
     }
@@ -286,7 +292,7 @@ impl Game {
                 self.check_game_over(now);
             }
             Message::Reveal(fleet) => self.enemy_fleet = fleet,
-            Message::Hello { .. } | Message::Bye => {}
+            Message::Hello { .. } | Message::Ping(_) | Message::Pong(_) | Message::Bye => {}
         }
     }
 

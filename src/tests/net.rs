@@ -123,6 +123,41 @@ fn guest_does_not_see_the_handshake() {
 }
 
 #[test]
+fn latency_is_unknown_right_after_connecting() {
+    let (_host, guest) = connected_pair();
+    assert_eq!(guest.latency(), None);
+}
+
+#[test]
+fn latency_is_measured_once_the_peer_answers_a_ping() {
+    let (_host, mut guest) = connected_pair();
+    wait_for(|| {
+        guest.poll();
+        guest.latency()
+    });
+}
+
+#[test]
+fn pings_are_not_passed_on_to_the_game() {
+    let (mut host, mut guest) = connected_pair();
+    host.poll();
+    host.send(Message::Ready);
+    assert_eq!(
+        wait_for(|| guest.poll()),
+        OpponentEvent::Message(Message::Ready)
+    );
+}
+
+#[test]
+fn pongs_are_not_passed_on_to_the_game() {
+    let (_host, mut guest) = connected_pair();
+    wait_for(|| match guest.poll() {
+        Some(event) => panic!("unexpected {event:?}"),
+        None => guest.latency(),
+    });
+}
+
+#[test]
 fn leaving_is_reported_as_a_disconnect() {
     let (host, mut guest) = connected_pair();
     drop(host);
@@ -248,4 +283,28 @@ fn each_end_knows_the_address_of_the_other() {
     let (host, guest) = connected_pair();
     assert!(host.peer().ip().is_loopback());
     assert!(guest.peer().ip().is_loopback());
+}
+
+#[test]
+fn pings_again_once_the_interval_has_passed() {
+    let (_host, mut guest) = connected_pair();
+    wait_for(|| {
+        guest.poll();
+        guest.ping.filter(|(id, _)| *id > 0)
+    });
+}
+
+#[test]
+fn a_garbled_message_ends_the_game_with_a_protocol_error() {
+    let mut host = Host::start(0).unwrap();
+    let mut peer = TcpStream::connect(("127.0.0.1", host.port())).unwrap();
+    let hello = Message::Hello {
+        version: PROTOCOL_VERSION,
+    };
+    writeln!(peer, "{}\nNONSENSE", hello.encode()).unwrap();
+    let mut link = wait_for(|| host.poll());
+    let OpponentEvent::Disconnected(why) = wait_for(|| link.poll()) else {
+        panic!("expected a disconnect");
+    };
+    assert!(why.starts_with("protocol error"), "{why}");
 }

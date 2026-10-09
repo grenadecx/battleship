@@ -22,13 +22,16 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       - name: Coverage report
+        # main.rs is the rendering shell; the game logic it drives lives in the library.
+        env:
+          IGNORE: --ignore-filename-regex src/main\.rs
         run: |
           cargo llvm-cov --no-report
-          cargo llvm-cov report --html
+          cargo llvm-cov report --html $IGNORE
           {
             echo '## Test coverage'
             echo '```'
-            cargo llvm-cov report --summary-only
+            cargo llvm-cov report --summary-only $IGNORE
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7

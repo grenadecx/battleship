@@ -1,0 +1,32 @@
+# The web version on a server of its own, with Caddy in front for HTTPS.
+# Put BATTLESHIP_DOMAIN=battleship.example.com in a .env file next to this one,
+# point the domain's DNS at the server, open ports 80 and 443, then:
+#
+#   docker compose up -d
+#
+# Update after a release with `docker compose pull && docker compose up -d`.
+# Rooms live in the service's memory, so that ends any games in progress.
+
+services:
+  battleship:
+    image: ghcr.io/grenadecx/battleship:latest
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      BATTLESHIP_DOMAIN: ${BATTLESHIP_DOMAIN:?set BATTLESHIP_DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates; keep it so a restart doesn't ask Let's Encrypt again.
+      - caddy_data:/data
+    depends_on:
+      - battleship
+
+volumes:
+  caddy_data:

@@ -98,6 +98,15 @@ The service listens on `PORT` (default 8080) and serves the files in
 `BATTLESHIP_WEB_DIR` (default `target/web`). `/healthz` answers `ok`, which the Docker
 image uses for its health check. Put it behind a reverse proxy with TLS when it faces
 the internet: pages served over HTTPS can only open secure WebSockets (`wss://`).
+`deploy/` has a ready setup for a server of its own: the published image behind
+[Caddy](https://caddyserver.com), which gets the certificate itself. Point a domain at
+the server, open ports 80 and 443, copy `deploy/` there, then:
+
+```sh
+echo BATTLESHIP_DOMAIN=battleship.example.com > .env
+docker compose up -d
+```
+
 `scripts/web-e2e.sh` plays the opening of an online game in two headless Chromes
 against a running service, as CI does against the Docker image.
 
@@ -148,7 +157,8 @@ The code is a Cargo workspace of three crates:
 | `crates/server` (`battleship-server`) | The web service: serves the browser build and relays games between browsers. |
 
 `web/` holds the page and the JavaScript side of the browser's WebSocket, and the
-`Dockerfile` builds the browser game and the service into one image.
+`Dockerfile` builds the browser game and the service into one image, which `deploy/`
+runs behind Caddy for HTTPS.
 
 | Module        | Responsibility |
 |---------------|----------------|

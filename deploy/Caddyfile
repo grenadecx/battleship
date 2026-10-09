@@ -1,0 +1,4 @@
+# Caddy gets the certificate for the domain and passes WebSockets through as is.
+{$BATTLESHIP_DOMAIN} {
+	reverse_proxy battleship:8080
+}

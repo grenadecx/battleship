@@ -3,7 +3,9 @@
 
 pub mod ai;
 pub mod domain;
+pub mod game;
 pub mod grid;
+pub mod layout;
 pub mod net;
 pub mod opponent;
 pub mod protocol;

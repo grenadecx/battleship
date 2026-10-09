@@ -2,18 +2,21 @@
 //! in the library crate and are covered by its tests.
 
 use battleship::domain::{BOARD_SIZE, Coord, FLEET, Orientation, Placement, ShipKind, ShotResult};
+use battleship::game::{Game, GameEvent};
 use battleship::grid::Knowledge;
+use battleship::layout::{
+    BOARD_PX, CELL, LEFT_BOARD, RIGHT_BOARD, board_cell_at, cell_center, cell_origin, missile_path,
+    missile_position,
+};
 use battleship::net::{self, DEFAULT_PORT, Host, Joining};
-use battleship::opponent::{ComputerOpponent, Opponent, OpponentEvent};
-use battleship::protocol::Message;
+use battleship::opponent::{ComputerOpponent, Opponent};
 use battleship::rng::Rng;
-use battleship::session::{Phase, Session};
-use battleship::setup::FleetEditor;
+use battleship::session::Phase;
 use battleship::sound::{self, Effect};
 use macroquad::audio::{PlaySoundParams, Sound, load_sound_from_bytes, play_sound};
 use macroquad::prelude::*;
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 static FONT_BYTES: &[u8] = include_bytes!("../assets/DejaVuSans-Bold.ttf");
 
@@ -58,12 +61,6 @@ fn measure(s: &str, size: f32) -> TextDimensions {
 
 const VW: f32 = 1200.0;
 const VH: f32 = 760.0;
-const CELL: f32 = 38.0;
-const BOARD_PX: f32 = CELL * BOARD_SIZE as f32;
-const LEFT_BOARD: Vec2 = Vec2::new(110.0, 165.0);
-const RIGHT_BOARD: Vec2 = Vec2::new(710.0, 165.0);
-
-const MISSILE_SECONDS: f32 = 0.65;
 
 // Palette
 const BG_TOP: Color = Color::new(0.02, 0.06, 0.13, 1.0);
@@ -626,37 +623,9 @@ fn joining_screen(ui: &mut Ui, joining: &mut Joining, address: &str) -> Option<S
 // A match against one opponent (computer or remote), possibly several rounds
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy)]
-enum Shot {
-    Outgoing,
-    Incoming(Coord),
-}
-
-struct Missile {
-    from: Vec2,
-    to: Vec2,
-    started: f64,
-    shot: Shot,
-}
-
 struct Match {
-    opponent: Box<dyn Opponent>,
+    game: Game,
     opponent_name: String,
-    vs_computer: bool,
-    session: Session,
-    editor: FleetEditor,
-    inbox: VecDeque<Message>,
-    missile: Option<Missile>,
-    hold_until: f64,
-    opponent_is_ready: bool,
-    enemy_fleet: Vec<Placement>,
-    disconnected: Option<String>,
-    game_over_at: Option<f64>,
-    pending_sound: Option<(f64, Effect)>,
-    shots: u32,
-    hits: u32,
-    wins: u32,
-    losses: u32,
     fx: Fx,
     rng: Rng,
 }
@@ -669,26 +638,10 @@ impl Match {
         vs_computer: bool,
     ) -> Self {
         let mut rng = Rng::from_time();
-        let mut editor = FleetEditor::new();
-        editor.randomize(&mut rng);
+        let game_rng = Rng::new(rng.next_u64());
         Match {
-            opponent,
+            game: Game::new(opponent, i_go_first, vs_computer, game_rng),
             opponent_name,
-            vs_computer,
-            session: Session::new(i_go_first),
-            editor,
-            inbox: VecDeque::new(),
-            missile: None,
-            hold_until: 0.0,
-            opponent_is_ready: false,
-            enemy_fleet: Vec::new(),
-            disconnected: None,
-            game_over_at: None,
-            pending_sound: None,
-            shots: 0,
-            hits: 0,
-            wins: 0,
-            losses: 0,
             fx: Fx::default(),
             rng,
         }
@@ -696,147 +649,61 @@ impl Match {
 
     fn frame(&mut self, ui: &mut Ui, audio: &Audio) -> Option<Screen> {
         let now = ui.time;
-        self.update(now, audio);
+        self.game.update(now);
+        self.react(now, audio);
 
         let shake = self.fx.shake_offset(now, &mut self.rng);
         let mut camera = letterbox_camera();
         camera.target -= shake;
         set_camera(&camera);
 
-        let next = if self.session.phase() == Phase::Placement {
+        let next = if self.game.session().phase() == Phase::Placement {
             self.placement_screen(ui)
         } else {
-            self.battle_screen(ui, audio)
+            self.battle_screen(ui)
         };
+        // Clicks this frame may have fired or deployed.
+        self.react(now, audio);
         self.fx.draw(now);
         set_camera(&letterbox_camera());
 
         if let Some(next) = next {
             return Some(next);
         }
-        if let Some(reason) = self.disconnected.clone() {
+        if let Some(reason) = self.game.disconnected().map(str::to_owned) {
             return self.disconnected_overlay(ui, &reason);
         }
-        if self.game_over_at.is_some_and(|t| now > t + 1.3) {
-            return self.game_over_overlay(ui, audio);
+        if self.game.game_over_at().is_some_and(|t| now > t + 1.3) {
+            return self.game_over_overlay(ui);
         }
         None
     }
 
-    // --- rules plumbing ---------------------------------------------------
-
-    fn update(&mut self, now: f64, audio: &Audio) {
-        while let Some(event) = self.opponent.poll() {
+    /// Turns the game's events into sound and spectacle.
+    fn react(&mut self, now: f64, audio: &Audio) {
+        for event in self.game.take_events() {
             match event {
-                OpponentEvent::Message(message) => self.inbox.push_back(message),
-                OpponentEvent::Disconnected(reason) => {
-                    self.disconnected.get_or_insert(reason);
+                GameEvent::Launched(_) => audio.play(Effect::Launch),
+                GameEvent::Impact {
+                    target,
+                    result,
+                    on_me,
+                } => self.impact(target, &result, on_me, now, audio),
+                GameEvent::Started { i_fire_first } => {
+                    let (text, color) = if i_fire_first {
+                        ("You fire first!".to_string(), GOOD)
+                    } else {
+                        (format!("{} fires first", self.opponent_name), ACCENT)
+                    };
+                    self.fx.toast(&text, vec2(VW / 2.0, VH / 2.0), color, now);
                 }
-            }
-        }
-        if self.disconnected.is_some() {
-            return;
-        }
-        if let Some((at, effect)) = self.pending_sound
-            && now >= at
-        {
-            audio.play(effect);
-            self.pending_sound = None;
-        }
-        if self
-            .missile
-            .as_ref()
-            .is_some_and(|m| now >= m.started + MISSILE_SECONDS as f64)
-        {
-            let missile = self.missile.take().expect("checked above");
-            self.land(missile.shot, now, audio);
-        }
-        if self.missile.is_none()
-            && now >= self.hold_until
-            && let Some(message) = self.inbox.pop_front()
-        {
-            self.handle(message, now, audio);
-        }
-    }
-
-    fn handle(&mut self, message: Message, now: f64, audio: &Audio) {
-        match message {
-            Message::Ready => match self.session.opponent_ready() {
-                Ok(()) => {
-                    self.opponent_is_ready = true;
-                    self.on_maybe_started(now);
-                }
-                Err(e) => self.broken(format!("Unexpected READY: {e}")),
-            },
-            Message::Fire(target) => {
-                if self.session.phase() != Phase::TheirTurn
-                    || self.session.my_board().was_shot(target)
-                {
-                    self.broken(format!("Opponent fired at {} out of turn", target.label()));
-                    return;
-                }
-                let from = RIGHT_BOARD + vec2(BOARD_PX / 2.0, -120.0);
-                self.launch(
-                    from,
-                    cell_center(LEFT_BOARD, target),
-                    Shot::Incoming(target),
-                    now,
-                    audio,
-                );
-            }
-            Message::Result(result) => {
-                let Phase::AwaitingResult(target) = self.session.phase() else {
-                    self.broken("Opponent reported a shot we did not fire".into());
-                    return;
-                };
-                if let Err(e) = self.session.receive_result(result.clone()) {
-                    self.broken(e.to_string());
-                    return;
-                }
-                if result != ShotResult::Miss {
-                    self.hits += 1;
-                }
-                self.impact(RIGHT_BOARD, target, &result, false, now, audio);
-                self.check_game_over(now);
-            }
-            Message::Reveal(fleet) => self.enemy_fleet = fleet,
-            Message::Hello { .. } | Message::Bye => {}
-        }
-    }
-
-    fn launch(&mut self, from: Vec2, to: Vec2, shot: Shot, now: f64, audio: &Audio) {
-        audio.play(Effect::Launch);
-        self.missile = Some(Missile {
-            from,
-            to,
-            started: now,
-            shot,
-        });
-    }
-
-    fn land(&mut self, shot: Shot, now: f64, audio: &Audio) {
-        // Our own shell lands silently; the opponent's report triggers the effect.
-        if let Shot::Incoming(target) = shot {
-            match self.session.receive_fire(target) {
-                Ok(result) => {
-                    self.opponent.send(Message::Result(result.clone()));
-                    self.impact(LEFT_BOARD, target, &result, true, now, audio);
-                    self.check_game_over(now);
-                }
-                Err(e) => self.broken(e.to_string()),
+                GameEvent::Fanfare(effect) => audio.play(effect),
             }
         }
     }
 
-    fn impact(
-        &mut self,
-        board: Vec2,
-        target: Coord,
-        result: &ShotResult,
-        on_me: bool,
-        now: f64,
-        audio: &Audio,
-    ) {
+    fn impact(&mut self, target: Coord, result: &ShotResult, on_me: bool, now: f64, audio: &Audio) {
+        let board = if on_me { LEFT_BOARD } else { RIGHT_BOARD };
         let center = cell_center(board, target);
         let toast_at = board + vec2(BOARD_PX / 2.0, BOARD_PX / 2.0);
         match result {
@@ -867,75 +734,6 @@ impl Match {
                 self.fx.toast(&text, toast_at, DANGER, now);
             }
         }
-        // Let the effect breathe before the next shot comes in.
-        let pause = if self.vs_computer { 0.85 } else { 0.35 };
-        self.hold_until = now + pause;
-    }
-
-    fn check_game_over(&mut self, now: f64) {
-        if !self.session.is_over() {
-            return;
-        }
-        self.game_over_at = Some(now);
-        self.opponent
-            .send(Message::Reveal(self.session.my_board().placements()));
-        if self.session.phase() == Phase::Won {
-            self.wins += 1;
-            self.pending_sound = Some((now + 1.0, Effect::Victory));
-        } else {
-            self.losses += 1;
-            self.pending_sound = Some((now + 1.0, Effect::Defeat));
-        }
-    }
-
-    fn on_maybe_started(&mut self, now: f64) {
-        match self.session.phase() {
-            Phase::MyTurn => {
-                self.opponent_is_ready = false;
-                self.fx
-                    .toast("You fire first!", vec2(VW / 2.0, VH / 2.0), GOOD, now);
-            }
-            Phase::TheirTurn => {
-                self.opponent_is_ready = false;
-                let text = format!("{} fires first", self.opponent_name);
-                self.fx.toast(&text, vec2(VW / 2.0, VH / 2.0), ACCENT, now);
-            }
-            _ => {}
-        }
-    }
-
-    fn broken(&mut self, why: String) {
-        self.disconnected
-            .get_or_insert(format!("Game stopped: {why}"));
-    }
-
-    fn fire(&mut self, target: Coord, now: f64, audio: &Audio) {
-        if self.missile.is_some() || self.session.fire(target).is_err() {
-            return;
-        }
-        self.shots += 1;
-        self.opponent.send(Message::Fire(target));
-        let from = LEFT_BOARD + vec2(BOARD_PX / 2.0, BOARD_PX + 40.0);
-        self.launch(
-            from,
-            cell_center(RIGHT_BOARD, target),
-            Shot::Outgoing,
-            now,
-            audio,
-        );
-    }
-
-    fn new_round(&mut self) {
-        if self.session.new_round().is_ok() {
-            self.editor = FleetEditor::new();
-            self.editor.randomize(&mut self.rng);
-            self.enemy_fleet.clear();
-            self.game_over_at = None;
-            self.pending_sound = None;
-            self.shots = 0;
-            self.hits = 0;
-            self.fx = Fx::default();
-        }
     }
 
     // --- screens ------------------------------------------------------------
@@ -959,10 +757,10 @@ impl Match {
         draw_board_frame(LEFT_BOARD, "YOUR FLEET", ui.time);
 
         let hovered = board_cell_at(LEFT_BOARD, ui.mouse);
-        for placement in self.editor.board().placements() {
+        for placement in self.game.editor().board().placements() {
             let lifted = hovered
                 .is_some_and(|h| placement.cells().unwrap_or_default().contains(&h))
-                && self.editor.selected().is_none();
+                && self.game.editor().selected().is_none();
             draw_ship(
                 LEFT_BOARD,
                 &placement,
@@ -974,7 +772,7 @@ impl Match {
             );
         }
         if let Some(at) = hovered {
-            if let Some((placement, ok)) = self.editor.preview(at) {
+            if let Some((placement, ok)) = self.game.editor().preview(at) {
                 if let Some(cells) = placement.cells() {
                     let tint = if ok { GOOD } else { DANGER };
                     draw_ship(
@@ -999,12 +797,12 @@ impl Match {
                 }
             }
             if ui.clicked {
-                self.editor.click(at);
+                self.game.editor_mut().click(at);
                 ui.clicked_button = true;
             }
         }
         if ui.right_clicked || is_key_pressed(KeyCode::R) {
-            self.editor.rotate();
+            self.game.editor_mut().rotate();
         }
 
         // Right hand panel: ship picker and actions.
@@ -1012,8 +810,8 @@ impl Match {
         text("Ships", px, 190.0, 30.0, INK);
         for (i, kind) in FLEET.iter().enumerate() {
             let rect = Rect::new(px, 205.0 + i as f32 * 50.0, 380.0, 42.0);
-            let placed = self.editor.board().has_ship(*kind);
-            let selected = self.editor.selected() == Some(*kind);
+            let placed = self.game.editor().board().has_ship(*kind);
+            let selected = self.game.editor().selected() == Some(*kind);
             let fill = if selected {
                 Color::new(0.25, 0.45, 0.25, 1.0)
             } else if rect.contains(ui.mouse) && !placed {
@@ -1038,11 +836,11 @@ impl Match {
                 draw_text_right("placed", rect.x + rect.w - 12.0, rect.y + 27.0, 18.0, GOOD);
             }
             if ui.clicked && rect.contains(ui.mouse) && !placed {
-                self.editor.select(*kind);
+                self.game.editor_mut().select(*kind);
                 ui.clicked_button = true;
             }
         }
-        let orientation = match self.editor.orientation() {
+        let orientation = match self.game.editor().orientation() {
             Orientation::Horizontal => "horizontal",
             Orientation::Vertical => "vertical",
         };
@@ -1064,19 +862,19 @@ impl Match {
         if ui.button(Rect::new(px, 520.0, 180.0, 50.0), "Random", true)
             || is_key_pressed(KeyCode::Space)
         {
-            self.editor.randomize(&mut self.rng);
+            self.game.randomize_fleet();
         }
         if ui.button(Rect::new(px + 200.0, 520.0, 180.0, 50.0), "Clear", true) {
-            self.editor.clear();
+            self.game.editor_mut().clear();
         }
-        let complete = self.editor.is_complete();
+        let complete = self.game.editor().is_complete();
         let ready_clicked = ui.button(
             Rect::new(px, 590.0, 380.0, 60.0),
             "Ready for battle!",
             complete,
         ) || (complete
             && (is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter)));
-        if self.opponent_is_ready {
+        if self.game.opponent_is_ready() {
             draw_text_centered(
                 &format!("{} is ready and waiting", self.opponent_name),
                 px + 190.0,
@@ -1085,24 +883,25 @@ impl Match {
                 GOOD,
             );
         }
-        if ready_clicked
-            && self.session.set_board(self.editor.board().clone()).is_ok()
-            && self.session.ready().is_ok()
-        {
-            self.opponent.send(Message::Ready);
-            self.on_maybe_started(ui.time);
+        if ready_clicked {
+            self.game.deploy();
         }
         None
     }
 
-    fn battle_screen(&mut self, ui: &mut Ui, audio: &Audio) -> Option<Screen> {
+    fn battle_screen(&mut self, ui: &mut Ui) -> Option<Screen> {
         if self.leave_button(ui) {
             return Some(Screen::Menu);
         }
         let now = ui.time;
-        let phase = self.session.phase();
+        let phase = self.game.session().phase();
         draw_text_centered(
-            &format!("You {} - {} {}", self.wins, self.losses, self.opponent_name),
+            &format!(
+                "You {} - {} {}",
+                self.game.wins(),
+                self.game.losses(),
+                self.opponent_name
+            ),
             VW / 2.0,
             52.0,
             26.0,
@@ -1114,8 +913,7 @@ impl Match {
         self.draw_my_board(now);
         self.draw_enemy_board(now);
 
-        let my_turn =
-            phase == Phase::MyTurn && self.missile.is_none() && self.disconnected.is_none();
+        let my_turn = self.game.can_fire();
         if my_turn {
             let pulse = 0.5 + 0.5 * (now as f32 * 4.0).sin();
             draw_rectangle_lines(
@@ -1127,16 +925,16 @@ impl Match {
                 Color::new(ACCENT.r, ACCENT.g, ACCENT.b, 0.4 + 0.5 * pulse),
             );
             if let Some(target) = board_cell_at(RIGHT_BOARD, ui.mouse)
-                && self.session.enemy_grid().can_target(target)
+                && self.game.session().enemy_grid().can_target(target)
             {
                 draw_crosshair(cell_center(RIGHT_BOARD, target), now);
                 if ui.clicked {
-                    self.fire(target, now, audio);
+                    self.game.fire(target, now);
                 }
             }
         }
         if let Phase::AwaitingResult(target) = phase
-            && self.missile.is_none()
+            && self.game.missile().is_none()
         {
             draw_crosshair(cell_center(RIGHT_BOARD, target), now);
         }
@@ -1157,9 +955,9 @@ impl Match {
         draw_text_centered(&status, VW / 2.0, 105.0, 30.0, status_color);
 
         // Fleet status under each board.
-        let my_board = self.session.my_board();
+        let my_board = self.game.session().my_board();
         draw_fleet_status(LEFT_BOARD.x, |k| my_board.is_sunk(k));
-        let sunk = self.session.enemy_grid().sunk_ships().to_vec();
+        let sunk = self.game.session().enemy_grid().sunk_ships().to_vec();
         draw_fleet_status(RIGHT_BOARD.x, |k| sunk.contains(&k));
 
         if phase == Phase::WaitingForOpponent {
@@ -1171,15 +969,15 @@ impl Match {
             );
         }
 
-        if let Some(missile) = &self.missile {
-            let p = ((now - missile.started) as f32 / MISSILE_SECONDS).clamp(0.0, 1.0);
-            draw_missile(missile.from, missile.to, p);
+        if let Some(missile) = self.game.missile() {
+            let (from, to) = missile_path(missile.shot);
+            draw_missile(from, to, missile.progress(now));
         }
         None
     }
 
     fn draw_my_board(&self, now: f64) {
-        let board = self.session.my_board();
+        let board = self.game.session().my_board();
         for placement in board.placements() {
             let color = if board.is_sunk(placement.kind) {
                 Color::new(0.35, 0.2, 0.18, 1.0)
@@ -1202,9 +1000,9 @@ impl Match {
     }
 
     fn draw_enemy_board(&self, now: f64) {
-        let grid = self.session.enemy_grid();
+        let grid = self.game.session().enemy_grid();
         // Ships revealed after the game, drawn as ghosts.
-        for placement in &self.enemy_fleet {
+        for placement in self.game.enemy_fleet() {
             let afloat = placement
                 .cells()
                 .unwrap_or_default()
@@ -1252,8 +1050,8 @@ impl Match {
         None
     }
 
-    fn game_over_overlay(&mut self, ui: &mut Ui, _audio: &Audio) -> Option<Screen> {
-        let won = self.session.phase() == Phase::Won;
+    fn game_over_overlay(&mut self, ui: &mut Ui) -> Option<Screen> {
+        let won = self.game.session().phase() == Phase::Won;
         let t = ui.time as f32;
         draw_rectangle(0.0, 230.0, VW, 300.0, Color::new(0.0, 0.02, 0.06, 0.82));
         let pulse = 1.0 + 0.04 * (t * 3.0).sin();
@@ -1263,11 +1061,14 @@ impl Match {
             ("DEFEAT", DANGER)
         };
         draw_text_centered(title, VW / 2.0, 330.0, 100.0 * pulse, color);
-        let accuracy = (100 * self.hits).checked_div(self.shots).unwrap_or(0);
         draw_text_centered(
             &format!(
                 "{} shots fired, {}% hit rate   ·   Score: You {} - {} {}",
-                self.shots, accuracy, self.wins, self.losses, self.opponent_name
+                self.game.shots(),
+                self.game.accuracy(),
+                self.game.wins(),
+                self.game.losses(),
+                self.opponent_name
             ),
             VW / 2.0,
             385.0,
@@ -1285,7 +1086,8 @@ impl Match {
             "Play again",
             true,
         ) {
-            self.new_round();
+            self.game.new_round();
+            self.fx = Fx::default();
         }
         if ui.button(
             Rect::new(VW / 2.0 + 20.0, 430.0, 280.0, 58.0),
@@ -1538,22 +1340,6 @@ fn draw_background(time: f64) {
     }
 }
 
-fn cell_origin(board: Vec2, c: Coord) -> Vec2 {
-    board + vec2(c.x as f32 * CELL, c.y as f32 * CELL)
-}
-
-fn cell_center(board: Vec2, c: Coord) -> Vec2 {
-    cell_origin(board, c) + vec2(CELL / 2.0, CELL / 2.0)
-}
-
-fn board_cell_at(board: Vec2, point: Vec2) -> Option<Coord> {
-    let local = (point - board) / CELL;
-    if local.x < 0.0 || local.y < 0.0 {
-        return None;
-    }
-    Coord::try_new(local.x as i32, local.y as i32)
-}
-
 fn draw_board_frame(board: Vec2, title: &str, time: f64) {
     let t = time as f32;
     draw_rectangle(
@@ -1744,11 +1530,6 @@ fn draw_crosshair(center: Vec2, time: f64) {
         2.0,
         ACCENT,
     );
-}
-
-fn missile_position(from: Vec2, to: Vec2, p: f32) -> Vec2 {
-    let arc = from.distance(to) * 0.35;
-    from.lerp(to, p) - vec2(0.0, arc * 4.0 * p * (1.0 - p))
 }
 
 fn draw_missile(from: Vec2, to: Vec2, p: f32) {

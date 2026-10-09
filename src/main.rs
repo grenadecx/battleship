@@ -112,6 +112,7 @@ async fn main() {
             18.0,
             MUTED,
         );
+        text(&format!("{} FPS", get_fps()), 16.0, VH - 14.0, 18.0, MUTED);
 
         if ui.clicked_button {
             audio.play(Effect::Click);

@@ -1,17 +1,18 @@
 //! Line based text protocol spoken between two peers (and the computer opponent).
 //!
 //! ```text
-//! HELLO BATTLESHIP 1
+//! HELLO BATTLESHIP 2
 //! READY
 //! FIRE 3 7
 //! RESULT MISS | RESULT HIT | RESULT SUNK Cruiser 3,7 4,7 5,7
 //! REVEAL Carrier,0,0,H Battleship,2,4,V ...
+//! PING 42 | PONG 42
 //! BYE
 //! ```
 
 use crate::domain::{Coord, Orientation, Placement, ShipKind, ShotResult};
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
@@ -24,6 +25,9 @@ pub enum Message {
     Result(ShotResult),
     /// The sender's fleet, shared once the game is over.
     Reveal(Vec<Placement>),
+    /// Asks the peer to echo the id back in a `Pong`, to measure latency.
+    Ping(u32),
+    Pong(u32),
     Bye,
 }
 
@@ -63,6 +67,8 @@ impl Message {
                 }
                 line
             }
+            Message::Ping(id) => format!("PING {id}"),
+            Message::Pong(id) => format!("PONG {id}"),
             Message::Bye => "BYE".to_string(),
         }
     }
@@ -75,6 +81,8 @@ impl Message {
             },
             ["READY"] => Message::Ready,
             ["BYE"] => Message::Bye,
+            ["PING", id] => Message::Ping(id.parse().map_err(|_| error(line))?),
+            ["PONG", id] => Message::Pong(id.parse().map_err(|_| error(line))?),
             ["FIRE", x, y] => Message::Fire(coord(x, y).ok_or_else(|| error(line))?),
             ["RESULT", "MISS"] => Message::Result(ShotResult::Miss),
             ["RESULT", "HIT"] => Message::Result(ShotResult::Hit),
@@ -153,6 +161,8 @@ mod tests {
             (Message::Fire(c(3, 7)), "FIRE 3 7"),
             (Message::Result(ShotResult::Miss), "RESULT MISS"),
             (Message::Result(ShotResult::Hit), "RESULT HIT"),
+            (Message::Ping(42), "PING 42"),
+            (Message::Pong(42), "PONG 42"),
             (Message::Bye, "BYE"),
         ] {
             assert_eq!(message.encode(), line, "{message:?}");
@@ -185,6 +195,8 @@ mod tests {
             Board::random(&mut Rng::new(4)).placements(),
         ));
         round_trip(Message::Reveal(vec![]));
+        round_trip(Message::Ping(u32::MAX));
+        round_trip(Message::Pong(0));
         round_trip(Message::Bye);
     }
 
@@ -225,6 +237,9 @@ mod tests {
             "RESULT SUNK Destroyer 1;1 2,1",
             "REVEAL Carrier,0,0,X",
             "REVEAL Carrier,0,0",
+            "PING",
+            "PING -1",
+            "PONG x",
         ] {
             assert!(Message::decode(line).is_err(), "accepted {line:?}");
         }

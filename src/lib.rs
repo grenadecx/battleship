@@ -4,6 +4,7 @@
 
 pub mod ai;
 pub mod domain;
+pub mod fps;
 pub mod game;
 pub mod grid;
 pub mod layout;

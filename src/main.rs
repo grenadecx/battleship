@@ -2,6 +2,7 @@
 //! in the library crate and are covered by its tests.
 
 use battleship::domain::{BOARD_SIZE, Coord, FLEET, Orientation, Placement, ShipKind, ShotResult};
+use battleship::fps::FpsMeter;
 use battleship::game::{Game, GameEvent};
 use battleship::grid::Knowledge;
 use battleship::layout::{
@@ -130,29 +131,6 @@ async fn main() {
             break;
         }
         next_frame().await;
-    }
-}
-
-/// Frame rate averaged over half a second, so the readout is steady enough to read.
-#[derive(Default)]
-struct FpsMeter {
-    frames: u32,
-    since: f64,
-    shown: Option<u32>,
-}
-
-impl FpsMeter {
-    const WINDOW_SECONDS: f64 = 0.5;
-
-    fn tick(&mut self, now: f64) -> Option<u32> {
-        self.frames += 1;
-        let elapsed = now - self.since;
-        if elapsed >= Self::WINDOW_SECONDS {
-            self.shown = Some((self.frames as f64 / elapsed).round() as u32);
-            self.frames = 0;
-            self.since = now;
-        }
-        self.shown
     }
 }
 

@@ -229,4 +229,16 @@ mod tests {
         // Random shooting needs ~95 shots on average.
         assert!(average < 60.0, "average shots {average}");
     }
+
+    #[test]
+    fn a_blocked_line_of_hits_falls_back_to_the_squares_around_them() {
+        let mut grid = TargetGrid::new();
+        grid.record(c(0, 0), &ShotResult::Hit).unwrap();
+        grid.record(c(1, 0), &ShotResult::Hit).unwrap();
+        grid.record(c(2, 0), &ShotResult::Miss).unwrap();
+        for seed in 0..20 {
+            let target = choose_target(&grid, &mut Rng::new(seed));
+            assert!([c(0, 1), c(1, 1)].contains(&target), "{target:?}");
+        }
+    }
 }

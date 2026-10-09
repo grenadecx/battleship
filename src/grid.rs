@@ -229,4 +229,11 @@ mod tests {
         assert!(grid.fleet_destroyed());
         assert!(grid.remaining_ships().is_empty());
     }
+
+    #[test]
+    fn default_grid_is_all_unknown() {
+        let grid = TargetGrid::default();
+        assert!(Coord::all().all(|c| grid.get(c) == Knowledge::Unknown));
+        assert!(grid.open_hits().is_empty());
+    }
 }

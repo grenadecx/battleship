@@ -211,4 +211,11 @@ mod tests {
             assert_eq!(editor.selected(), Some(kind));
         }
     }
+
+    #[test]
+    fn default_editor_starts_empty() {
+        let editor = FleetEditor::default();
+        assert!(!editor.is_complete());
+        assert!(editor.board().placements().is_empty());
+    }
 }

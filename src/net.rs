@@ -344,6 +344,10 @@ mod tests {
         assert!(parse_address("1.2.3.4:99999").is_err());
         assert!(parse_address("1.2.3.4:abc").is_err());
         assert!(parse_address("has space:80").is_err());
+        assert!(parse_address("[::1").is_err());
+        assert!(parse_address("[::1]8000").is_err());
+        assert_eq!(parse_address(":80"), Err("\":80\" has no host".into()));
+        assert_eq!(parse_address("[]"), Err("\"[]\" has no host".into()));
     }
 
     #[test]
@@ -457,5 +461,21 @@ mod tests {
             assert!(Instant::now() < deadline, "port {port} still in use");
             thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    #[test]
+    fn sending_to_a_vanished_peer_reports_the_disconnect() {
+        let (host, mut guest) = connected_pair();
+        drop(host);
+        thread::sleep(Duration::from_millis(50));
+        // The first write after the peer closed may still be accepted; later
+        // ones fail, and the link shuts itself down.
+        for _ in 0..10 {
+            guest.send(Message::Ready);
+        }
+        assert!(matches!(
+            wait_for(|| guest.poll()),
+            OpponentEvent::Disconnected(_)
+        ));
     }
 }

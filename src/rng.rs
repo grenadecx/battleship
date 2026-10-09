@@ -96,4 +96,15 @@ mod tests {
         assert_eq!(rng.pick(&empty), None);
         assert_eq!(rng.pick(&[5]), Some(&5));
     }
+
+    #[test]
+    fn clock_seeded_generators_differ() {
+        let mut a = Rng::from_time();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let mut b = Rng::from_time();
+        assert_ne!(
+            (0..4).map(|_| a.next_u64()).collect::<Vec<_>>(),
+            (0..4).map(|_| b.next_u64()).collect::<Vec<_>>()
+        );
+    }
 }

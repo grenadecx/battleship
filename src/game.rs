@@ -811,4 +811,43 @@ mod tests {
         game.new_round();
         assert_eq!(game.session().phase(), Phase::MyTurn);
     }
+
+    #[test]
+    fn sinking_the_whole_enemy_fleet_wins() {
+        let (mut game, wire) = started(true);
+        let mut enemy = crate::domain::Board::random(&mut Rng::new(5));
+        let mut targets = enemy
+            .placements()
+            .into_iter()
+            .flat_map(|p| p.cells().unwrap());
+        let my_board = game.session().my_board().clone();
+        let mut water = Coord::all().filter(|c| my_board.ship_at(*c).is_none());
+        let mut now = 0.0;
+        while game.game_over_at().is_none() {
+            if game.can_fire() {
+                let target = targets.next().expect("fleet sunk before the game ended");
+                game.fire(target, now);
+                say(&wire, Message::Result(enemy.fire(target).unwrap()));
+                // Like the computer, the opponent fires back right after reporting.
+                if !enemy.all_sunk() {
+                    say(&wire, Message::Fire(water.next().unwrap()));
+                }
+            }
+            now += 0.1;
+            game.update(now);
+            assert_eq!(game.disconnected(), None);
+        }
+        assert_eq!(game.session().phase(), Phase::Won);
+        assert_eq!((game.wins(), game.losses()), (1, 0));
+        assert_eq!((game.shots(), game.hits(), game.accuracy()), (17, 17, 100));
+        assert!(matches!(
+            wire.borrow().sent.last(),
+            Some(Message::Reveal(fleet)) if fleet.len() == 5
+        ));
+        game.update(now + FANFARE_DELAY);
+        assert!(
+            game.take_events()
+                .contains(&GameEvent::Fanfare(Effect::Victory))
+        );
+    }
 }

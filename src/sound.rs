@@ -249,4 +249,11 @@ mod tests {
             assert_eq!(decoded, samples(effect).len(), "{effect:?}");
         }
     }
+
+    #[test]
+    fn finishing_silence_keeps_it_silent() {
+        let mut samples = vec![0.0; 1000];
+        finish(&mut samples);
+        assert!(samples.iter().all(|v| *v == 0.0));
+    }
 }

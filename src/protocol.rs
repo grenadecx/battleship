@@ -232,4 +232,12 @@ mod tests {
             assert!(Message::decode(line).is_err(), "accepted {line:?}");
         }
     }
+
+    #[test]
+    fn protocol_errors_read_as_such() {
+        assert_eq!(
+            ProtocolError("bad line".into()).to_string(),
+            "protocol error: bad line"
+        );
+    }
 }

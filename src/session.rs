@@ -460,4 +460,24 @@ mod tests {
         let mut s = ready_session(true);
         assert!(s.opponent_ready().is_err());
     }
+
+    #[test]
+    fn errors_explain_themselves() {
+        let messages = [
+            SessionError::NotAllowedNow(Phase::MyTurn),
+            SessionError::FleetIncomplete,
+            SessionError::AlreadyTargeted(Coord::new(1, 2)),
+            SessionError::BadReport("nonsense".into()),
+        ]
+        .map(|e| e.to_string());
+        assert_eq!(
+            messages,
+            [
+                "not allowed during MyTurn",
+                "the fleet is not fully placed",
+                "B3 was already targeted",
+                "bad report: nonsense",
+            ]
+        );
+    }
 }
